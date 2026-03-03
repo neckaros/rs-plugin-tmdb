@@ -173,6 +173,46 @@ pub struct TmdbImagesResponse {
     pub logos: Option<Vec<TmdbImage>>,
 }
 
+// --- Person structs ---
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbPersonDetail {
+    pub id: u64,
+    pub name: String,
+    pub also_known_as: Option<Vec<String>>,
+    pub biography: Option<String>,
+    pub birthday: Option<String>,
+    pub deathday: Option<String>,
+    pub gender: Option<u8>,
+    pub imdb_id: Option<String>,
+    pub known_for_department: Option<String>,
+    pub place_of_birth: Option<String>,
+    pub profile_path: Option<String>,
+    pub popularity: Option<f64>,
+    pub images: Option<TmdbPersonImages>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TmdbPersonImages {
+    pub profiles: Option<Vec<TmdbImage>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TmdbPersonResult {
+    pub id: u64,
+    pub name: String,
+    pub also_known_as: Vec<String>,
+    pub biography: Option<String>,
+    pub birthday: Option<String>,
+    pub deathday: Option<String>,
+    pub gender: Option<u8>,
+    pub imdb_id: Option<String>,
+    pub known_for_department: Option<String>,
+    pub place_of_birth: Option<String>,
+    pub profile_path: Option<String>,
+    pub images: Vec<TmdbImage>,
+}
+
 // --- Public functions ---
 
 pub fn build_image_url(file_path: &str, size: &str) -> String {
@@ -213,6 +253,49 @@ pub fn build_tv_detail_url(api_key: &str, tv_id: u64) -> String {
     format!(
         "https://api.themoviedb.org/3/tv/{tv_id}?api_key={api_key}&append_to_response=credits,images"
     )
+}
+
+pub fn build_person_detail_url(api_key: &str, person_id: u64) -> String {
+    format!(
+        "https://api.themoviedb.org/3/person/{person_id}?api_key={api_key}&append_to_response=images"
+    )
+}
+
+pub fn build_person_search_url(api_key: &str, query: &str, page: Option<u32>) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let encoded = encode_query_component(trimmed);
+    let page_num = page.unwrap_or(1);
+    Some(format!(
+        "https://api.themoviedb.org/3/search/person?api_key={api_key}&query={encoded}&page={page_num}"
+    ))
+}
+
+pub fn parse_person_detail_json(json: &str) -> Option<TmdbPersonResult> {
+    let detail: TmdbPersonDetail = serde_json::from_str(json).ok()?;
+    Some(person_detail_to_result(detail))
+}
+
+pub fn parse_person_search_json(json: &str) -> Option<(Vec<TmdbPersonResult>, Option<String>)> {
+    let response: TmdbSearchResponse = serde_json::from_str(json).ok()?;
+    let next_page_key = if response.page < response.total_pages {
+        Some((response.page + 1).to_string())
+    } else {
+        None
+    };
+    let results = response
+        .results
+        .into_iter()
+        .map(|item| TmdbPersonResult {
+            id: item.id,
+            name: item.name.unwrap_or_else(|| item.title.unwrap_or_default()),
+            profile_path: item.poster_path,
+            ..Default::default()
+        })
+        .collect();
+    Some((results, next_page_key))
 }
 
 pub fn parse_movie_search_json(json: &str) -> Option<(Vec<TmdbResult>, Option<String>)> {
@@ -415,6 +498,53 @@ fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
         },
         ..Default::default()
     }
+}
+
+fn person_detail_to_result(detail: TmdbPersonDetail) -> TmdbPersonResult {
+    let images_resp = detail.images.unwrap_or_default();
+
+    TmdbPersonResult {
+        id: detail.id,
+        name: detail.name,
+        also_known_as: detail.also_known_as.unwrap_or_default(),
+        biography: detail.biography,
+        birthday: detail.birthday,
+        deathday: detail.deathday,
+        gender: detail.gender,
+        imdb_id: detail.imdb_id,
+        known_for_department: detail.known_for_department,
+        place_of_birth: detail.place_of_birth,
+        profile_path: detail.profile_path,
+        images: images_resp.profiles.unwrap_or_default(),
+    }
+}
+
+/// Parse a TMDB person ID from a string. Accepts:
+/// - `tmdb-person:5719226` → Some(5719226)
+/// - `tmdb:5719226` → Some(5719226) (generic, used in person context)
+pub fn parse_tmdb_person_id(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+
+    if let Some(id_str) = lower.strip_prefix("tmdb-person:") {
+        return id_str.parse::<u64>().ok();
+    }
+
+    if let Some(id_str) = lower.strip_prefix("tmdb:") {
+        return id_str.parse::<u64>().ok();
+    }
+
+    // URL format: https://www.themoviedb.org/person/5719226
+    let re = Regex::new(r"(?i)(?:https?://)?(?:www\.)?themoviedb\.org/person/(\d+)").ok()?;
+    if let Some(caps) = re.captures(trimmed) {
+        return caps.get(1)?.as_str().parse::<u64>().ok();
+    }
+
+    None
 }
 
 #[cfg(test)]

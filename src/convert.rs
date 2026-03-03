@@ -13,7 +13,7 @@ use rs_plugin_common_interfaces::{
 
 use crate::tmdb::{
     build_image_url, TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImage, TmdbMediaType,
-    TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
+    TmdbPersonResult, TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
 };
 
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
@@ -199,6 +199,124 @@ fn build_tag_details(genres: &[TmdbGenre]) -> Vec<Tag> {
             path: "/".to_string(),
         })
         .collect()
+}
+
+pub fn tmdb_person_to_metadata(item: TmdbPersonResult) -> RsLookupMetadataResultWrapper {
+    let mut images = Vec::new();
+
+    // Primary profile image
+    if let Some(ref path) = item.profile_path {
+        images.push(ExternalImage {
+            kind: Some(ImageType::Poster),
+            url: RsRequest {
+                url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    }
+
+    // Additional profile images
+    for img in &item.images {
+        let url = build_image_url(&img.file_path, TMDB_IMAGE_SIZE_ORIGINAL);
+        if images.iter().any(|e| e.url.url == url) {
+            continue;
+        }
+        images.push(tmdb_image_to_external(img, ImageType::Poster));
+    }
+
+    let person = Person {
+        id: format!("tmdb-person:{}", item.id),
+        name: item.name,
+        tmdb: Some(item.id),
+        imdb: item.imdb_id,
+        bio: item.biography,
+        birthday: item.birthday.as_deref().and_then(parse_date_to_timestamp),
+        death: item.deathday.as_deref().and_then(parse_date_to_timestamp),
+        gender: item.gender.and_then(map_tmdb_gender),
+        country: item.place_of_birth,
+        kind: item.known_for_department,
+        alt: if item.also_known_as.is_empty() {
+            None
+        } else {
+            Some(item.also_known_as)
+        },
+        portrait: item
+            .profile_path
+            .as_deref()
+            .map(|p| build_image_url(p, TMDB_IMAGE_SIZE_ORIGINAL)),
+        generated: true,
+        ..Default::default()
+    };
+
+    RsLookupMetadataResultWrapper {
+        metadata: RsLookupMetadataResult::Person(person),
+        relations: Some(Relations {
+            ext_images: if images.is_empty() {
+                None
+            } else {
+                Some(images)
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+pub fn tmdb_person_to_images(item: &TmdbPersonResult) -> Vec<ExternalImage> {
+    let mut images = Vec::new();
+
+    if let Some(ref path) = item.profile_path {
+        images.push(ExternalImage {
+            kind: Some(ImageType::Poster),
+            url: RsRequest {
+                url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    }
+
+    for img in &item.images {
+        let url = build_image_url(&img.file_path, TMDB_IMAGE_SIZE_ORIGINAL);
+        if images.iter().any(|e| e.url.url == url) {
+            continue;
+        }
+        images.push(tmdb_image_to_external(img, ImageType::Poster));
+    }
+
+    images
+}
+
+fn parse_date_to_timestamp(date: &str) -> Option<i64> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let year: i32 = parts[0].parse().ok()?;
+    let month: u32 = parts[1].parse().ok()?;
+    let day: u32 = parts[2].parse().ok()?;
+
+    if month == 0 || month > 12 || day == 0 || day > 31 {
+        return None;
+    }
+
+    // Approximate: days since Unix epoch
+    let days_from_year = (year as i64 - 1970) * 365 + ((year as i64 - 1969) / 4);
+    let month_days: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let days = days_from_year + month_days[(month - 1) as usize] + day as i64 - 1;
+    Some(days * 86400)
+}
+
+fn map_tmdb_gender(gender: u8) -> Option<rs_plugin_common_interfaces::Gender> {
+    use rs_plugin_common_interfaces::Gender;
+    match gender {
+        0 => None,
+        1 => Some(Gender::Female),
+        2 => Some(Gender::Male),
+        3 => Some(Gender::Other),
+        _ => None,
+    }
 }
 
 fn parse_year_from_date(date: &Option<String>) -> Option<u16> {

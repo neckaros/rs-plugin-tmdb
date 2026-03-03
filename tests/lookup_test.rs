@@ -2,8 +2,8 @@ use extism::*;
 use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
     lookup::{
-        RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie, RsLookupQuery,
-        RsLookupSerie, RsLookupWrapper,
+        RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie, RsLookupPerson,
+        RsLookupQuery, RsLookupSerie, RsLookupWrapper,
     },
 };
 
@@ -290,6 +290,50 @@ fn test_lookup_images() {
     println!("Got {} images for tmdb:550", images.len());
     for img in &images {
         println!("  {:?}: {}", img.kind, img.url.url);
+    }
+}
+
+#[test]
+fn test_lookup_person_tmdb_5719226() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Person(RsLookupPerson {
+            name: Some("tmdb:5719226".to_string()),
+            ids: None,
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let input_str = serde_json::to_string(&input).unwrap();
+    match plugin.call::<&str, &[u8]>("lookup_metadata", &input_str) {
+        Ok(output) => {
+            let results: RsLookupMetadataResults =
+                serde_json::from_slice(output).expect("Failed to parse output");
+            println!("Got {} results for person tmdb:5719226", results.results.len());
+            for r in &results.results {
+                match &r.metadata {
+                    RsLookupMetadataResult::Person(p) => {
+                        println!("  Person: {} (id: {})", p.name, p.id);
+                        println!("  Full: {:?}", p);
+                    }
+                    other => println!("  Other type: {:?}", other),
+                }
+                if let Some(rel) = &r.relations {
+                    if let Some(imgs) = &rel.ext_images {
+                        println!("  Images: {} entries", imgs.len());
+                        for img in imgs.iter().take(5) {
+                            println!("    - {:?}: {}", img.kind, img.url.url);
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error for person tmdb:5719226: {}", e);
+        }
     }
 }
 

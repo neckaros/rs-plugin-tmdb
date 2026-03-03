@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use rs_plugin_common_interfaces::{
     domain::external_images::ExternalImage,
     lookup::{
-        RsLookupMatchType, RsLookupMetadataResults, RsLookupMovie, RsLookupQuery,
-        RsLookupSerie, RsLookupWrapper,
+        RsLookupMatchType, RsLookupMetadataResults, RsLookupMovie, RsLookupPerson,
+        RsLookupQuery, RsLookupSerie, RsLookupWrapper,
     },
     CredentialType, PluginInformation, PluginType,
 };
@@ -13,11 +13,13 @@ use rs_plugin_common_interfaces::{
 mod convert;
 mod tmdb;
 
-use convert::{tmdb_result_to_images, tmdb_result_to_metadata};
+use convert::{tmdb_person_to_images, tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata};
 use tmdb::{
-    build_movie_detail_url, build_movie_search_url, build_tv_detail_url, build_tv_search_url,
-    parse_movie_detail_json, parse_movie_search_json, parse_tmdb_id, parse_tv_detail_json,
-    parse_tv_search_json, TmdbMediaType, TmdbResult,
+    build_movie_detail_url, build_movie_search_url, build_person_detail_url,
+    build_person_search_url, build_tv_detail_url, build_tv_search_url, parse_movie_detail_json,
+    parse_movie_search_json, parse_person_detail_json, parse_person_search_json, parse_tmdb_id,
+    parse_tmdb_person_id, parse_tv_detail_json, parse_tv_search_json, TmdbMediaType,
+    TmdbPersonResult, TmdbResult,
 };
 
 enum LookupTarget {
@@ -28,12 +30,17 @@ enum LookupTarget {
     SearchTv(String),
 }
 
+enum PersonLookupTarget {
+    DirectPerson(u64),
+    SearchPerson(String),
+}
+
 #[plugin_fn]
 pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "tmdb_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 1,
+        version: 2,
         interface_version: 1,
         repo: None,
         publisher: "neckaros".into(),
@@ -232,6 +239,53 @@ fn resolve_serie_lookup_target(serie: &RsLookupSerie) -> Option<LookupTarget> {
         .map(|n| LookupTarget::SearchTv(n.to_string()))
 }
 
+fn resolve_person_lookup_target(person: &RsLookupPerson) -> Option<PersonLookupTarget> {
+    if let Some(name) = person.name.as_deref() {
+        if let Some(id) = parse_tmdb_person_id(name) {
+            return Some(PersonLookupTarget::DirectPerson(id));
+        }
+    }
+
+    if let Some(ids) = person.ids.as_ref() {
+        if let Some(tmdb_id) = ids.tmdb {
+            return Some(PersonLookupTarget::DirectPerson(tmdb_id));
+        }
+    }
+
+    person
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| PersonLookupTarget::SearchPerson(n.to_string()))
+}
+
+fn execute_person_detail_request(
+    api_key: &str,
+    person_id: u64,
+) -> FnResult<Option<TmdbPersonResult>> {
+    let url = build_person_detail_url(api_key, person_id);
+    let body = execute_json_request(url)?;
+    Ok(parse_person_detail_json(&body))
+}
+
+fn execute_person_search_request(
+    api_key: &str,
+    query: &str,
+    page: Option<u32>,
+) -> FnResult<(Vec<TmdbPersonResult>, Option<String>)> {
+    let url = build_person_search_url(api_key, query, page)
+        .ok_or_else(|| WithReturnCode::new(extism_pdk::Error::msg("Empty search query"), 404))?;
+
+    let body = execute_json_request(url)?;
+    parse_person_search_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB person search response"),
+            500,
+        )
+    })
+}
+
 fn lookup_tmdb(
     lookup: &RsLookupWrapper,
     api_key: &str,
@@ -343,11 +397,63 @@ fn lookup_tmdb(
     }
 }
 
+fn lookup_tmdb_person(
+    lookup: &RsLookupWrapper,
+    api_key: &str,
+) -> FnResult<(Vec<TmdbPersonResult>, Option<String>, Option<RsLookupMatchType>)> {
+    match &lookup.query {
+        RsLookupQuery::Person(person) => {
+            let page = person
+                .page_key
+                .as_deref()
+                .and_then(|k| k.parse::<u32>().ok());
+
+            match resolve_person_lookup_target(person) {
+                Some(PersonLookupTarget::DirectPerson(id)) => {
+                    let result = execute_person_detail_request(api_key, id)?;
+                    Ok((
+                        result.into_iter().collect(),
+                        None,
+                        Some(RsLookupMatchType::ExactId),
+                    ))
+                }
+                Some(PersonLookupTarget::SearchPerson(query)) => {
+                    let (results, next_page_key) =
+                        execute_person_search_request(api_key, &query, page)?;
+                    Ok((results, next_page_key, None))
+                }
+                None => Err(WithReturnCode::new(
+                    extism_pdk::Error::msg("Empty person query"),
+                    404,
+                )),
+            }
+        }
+        _ => Ok((vec![], None, None)),
+    }
+}
+
 #[plugin_fn]
 pub fn lookup_metadata(
     Json(lookup): Json<RsLookupWrapper>,
 ) -> FnResult<Json<RsLookupMetadataResults>> {
     let api_key = extract_api_key(&lookup)?;
+
+    if matches!(&lookup.query, RsLookupQuery::Person(_)) {
+        let (results, next_page_key, match_type) = lookup_tmdb_person(&lookup, &api_key)?;
+        let results = results
+            .into_iter()
+            .map(|r| {
+                let mut result = tmdb_person_to_metadata(r);
+                result.match_type = match_type.clone();
+                result
+            })
+            .collect();
+        return Ok(Json(RsLookupMetadataResults {
+            results,
+            next_page_key,
+        }));
+    }
+
     let (results, next_page_key, match_type) = lookup_tmdb(&lookup, &api_key)?;
 
     let results = results
@@ -370,6 +476,20 @@ pub fn lookup_metadata_images(
     Json(lookup): Json<RsLookupWrapper>,
 ) -> FnResult<Json<Vec<ExternalImage>>> {
     let api_key = extract_api_key(&lookup)?;
+
+    if matches!(&lookup.query, RsLookupQuery::Person(_)) {
+        let (results, _, match_type) = lookup_tmdb_person(&lookup, &api_key)?;
+        let images: Vec<ExternalImage> = results
+            .iter()
+            .flat_map(tmdb_person_to_images)
+            .map(|mut img| {
+                img.match_type = match_type.clone();
+                img
+            })
+            .collect();
+        return Ok(Json(deduplicate_images(images)));
+    }
+
     let (results, _, match_type) = lookup_tmdb(&lookup, &api_key)?;
 
     let images: Vec<ExternalImage> = results
