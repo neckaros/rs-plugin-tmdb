@@ -40,9 +40,9 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "tmdb_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 3,
+        version: 4,
         interface_version: 1,
-        repo: Some("https://github.com/flashthepublic/rs-plugin-tmdb".to_string()),
+        repo: Some("https://github.com/neckaros/rs-plugin-tmdb".to_string()),
         publisher: "neckaros".into(),
         description: "Look up movie and TV show metadata from The Movie Database (TMDB)".into(),
         credential_kind: Some(CredentialType::Token),
@@ -622,7 +622,7 @@ mod tests {
         let movie = RsLookupMovie {
             name: Some("ignored".to_string()),
             ids: Some(RsIds {
-                other_ids: Some(vec!["tmdb-movie:550".to_string()].into()),
+                other_ids: Some(vec!["tmdb:550".to_string()].into()),
                 ..Default::default()
             }),
             page_key: None,
@@ -664,7 +664,7 @@ mod tests {
     #[test]
     fn resolve_serie_target_prefers_direct_id() {
         let serie = RsLookupSerie {
-            name: Some("tmdb-tv:1396".to_string()),
+            name: Some("tmdb:1396".to_string()),
             ids: None,
             page_key: None,
         };

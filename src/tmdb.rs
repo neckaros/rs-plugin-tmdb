@@ -346,16 +346,6 @@ pub fn parse_tmdb_id(value: &str) -> Option<(u64, Option<TmdbMediaType>)> {
 
     let lower = trimmed.to_ascii_lowercase();
 
-    // tmdb-movie:550
-    if let Some(id_str) = lower.strip_prefix("tmdb-movie:") {
-        return id_str.parse::<u64>().ok().map(|id| (id, Some(TmdbMediaType::Movie)));
-    }
-
-    // tmdb-tv:1396
-    if let Some(id_str) = lower.strip_prefix("tmdb-tv:") {
-        return id_str.parse::<u64>().ok().map(|id| (id, Some(TmdbMediaType::Tv)));
-    }
-
     // tmdb:550
     if let Some(id_str) = lower.strip_prefix("tmdb:") {
         return id_str.parse::<u64>().ok().map(|id| (id, None));
@@ -520,8 +510,8 @@ fn person_detail_to_result(detail: TmdbPersonDetail) -> TmdbPersonResult {
 }
 
 /// Parse a TMDB person ID from a string. Accepts:
-/// - `tmdb-person:5719226` → Some(5719226)
-/// - `tmdb:5719226` → Some(5719226) (generic, used in person context)
+/// - `tmdb:5719226` → Some(5719226)
+/// - person URL → Some(id)
 pub fn parse_tmdb_person_id(value: &str) -> Option<u64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -529,10 +519,6 @@ pub fn parse_tmdb_person_id(value: &str) -> Option<u64> {
     }
 
     let lower = trimmed.to_ascii_lowercase();
-
-    if let Some(id_str) = lower.strip_prefix("tmdb-person:") {
-        return id_str.parse::<u64>().ok();
-    }
 
     if let Some(id_str) = lower.strip_prefix("tmdb:") {
         return id_str.parse::<u64>().ok();
@@ -617,14 +603,8 @@ mod tests {
     #[test]
     fn parse_tmdb_id_prefix_format() {
         assert_eq!(parse_tmdb_id("tmdb:550"), Some((550, None)));
-        assert_eq!(
-            parse_tmdb_id("tmdb-movie:550"),
-            Some((550, Some(TmdbMediaType::Movie)))
-        );
-        assert_eq!(
-            parse_tmdb_id("tmdb-tv:1396"),
-            Some((1396, Some(TmdbMediaType::Tv)))
-        );
+        assert_eq!(parse_tmdb_id("tmdb-movie:550"), None);
+        assert_eq!(parse_tmdb_id("tmdb-tv:1396"), None);
     }
 
     #[test]

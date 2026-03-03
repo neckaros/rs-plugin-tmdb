@@ -1,6 +1,6 @@
 use extism::*;
 use rs_plugin_common_interfaces::{
-    domain::external_images::ExternalImage,
+    domain::{external_images::ExternalImage, rs_ids::RsIds},
     lookup::{
         RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie, RsLookupPerson,
         RsLookupQuery, RsLookupSerie, RsLookupWrapper,
@@ -191,7 +191,7 @@ fn test_lookup_tv_direct_id() {
 
     let input = RsLookupWrapper {
         query: RsLookupQuery::Serie(RsLookupSerie {
-            name: Some("tmdb-tv:1396".to_string()),
+            name: Some("tmdb:1396".to_string()),
             ids: None,
             page_key: None,
         }),
@@ -202,7 +202,7 @@ fn test_lookup_tv_direct_id() {
     let results = call_lookup(&mut plugin, &input);
     assert!(
         !results.results.is_empty(),
-        "Expected result for tmdb-tv:1396"
+        "Expected result for tmdb:1396"
     );
 
     let first = &results.results[0];
@@ -300,7 +300,10 @@ fn test_lookup_person_tmdb_5719226() {
     let input = RsLookupWrapper {
         query: RsLookupQuery::Person(RsLookupPerson {
             name: Some("tmdb:5719226".to_string()),
-            ids: None,
+            ids: Some(RsIds {
+                tmdb: Some(5719226),
+                ..Default::default()
+            }),
             page_key: None,
         }),
         credential: None,
