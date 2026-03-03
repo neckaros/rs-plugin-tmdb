@@ -42,7 +42,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
         capabilities: vec![PluginType::LookupMetadata],
         version: 2,
         interface_version: 1,
-        repo: None,
+        repo: Some("https://github.com/flashthepublic/rs-plugin-tmdb".to_string()),
         publisher: "neckaros".into(),
         description: "Look up movie and TV show metadata from The Movie Database (TMDB)".into(),
         credential_kind: Some(CredentialType::Token),
