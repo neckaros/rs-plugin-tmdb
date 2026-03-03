@@ -40,7 +40,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "tmdb_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 2,
+        version: 3,
         interface_version: 1,
         repo: Some("https://github.com/flashthepublic/rs-plugin-tmdb".to_string()),
         publisher: "neckaros".into(),

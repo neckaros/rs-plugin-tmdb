@@ -24,7 +24,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
     let metadata = match item.media_type.as_ref() {
         Some(TmdbMediaType::Tv) => {
             let serie = Serie {
-                id: format!("tmdb:{}", item.id),
+                id: item.id.to_string(),
                 name: item.title,
                 kind: Some(SerieType::Tv),
                 year: parse_year_from_date(&item.release_date),
@@ -36,7 +36,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
         }
         _ => {
             let movie = Movie {
-                id: format!("tmdb:{}", item.id),
+                id: item.id.to_string(),
                 name: item.title,
                 year: parse_year_from_date(&item.release_date),
                 overview: item.overview,
@@ -144,14 +144,14 @@ fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage {
 
 fn build_people_details(cast: &[TmdbCastMember], crew: &[TmdbCrewMember]) -> Vec<Person> {
     let mut people = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_ids = std::collections::HashSet::<u64>::new();
 
     for member in cast {
-        let id = format!("tmdb-person:{}", member.id);
-        if seen_ids.insert(id.clone()) {
+        if seen_ids.insert(member.id) {
             people.push(Person {
-                id,
+                id: member.id.to_string(),
                 name: member.name.clone(),
+                tmdb: Some(member.id),
                 generated: true,
                 ..Default::default()
             });
@@ -167,11 +167,11 @@ fn build_people_details(cast: &[TmdbCastMember], crew: &[TmdbCrewMember]) -> Vec
         ) {
             continue;
         }
-        let id = format!("tmdb-person:{}", member.id);
-        if seen_ids.insert(id.clone()) {
+        if seen_ids.insert(member.id) {
             people.push(Person {
-                id,
+                id: member.id.to_string(),
                 name: member.name.clone(),
+                tmdb: Some(member.id),
                 generated: true,
                 ..Default::default()
             });
@@ -226,7 +226,7 @@ pub fn tmdb_person_to_metadata(item: TmdbPersonResult) -> RsLookupMetadataResult
     }
 
     let person = Person {
-        id: format!("tmdb-person:{}", item.id),
+        id: item.id.to_string(),
         name: item.name,
         tmdb: Some(item.id),
         imdb: item.imdb_id,
@@ -377,7 +377,7 @@ mod tests {
         });
 
         if let RsLookupMetadataResult::Movie(movie) = result.metadata {
-            assert_eq!(movie.id, "tmdb:550");
+            assert_eq!(movie.id, "550");
             assert_eq!(movie.name, "Fight Club");
             assert_eq!(movie.tmdb, Some(550));
             assert_eq!(movie.imdb, Some("tt0137523".to_string()));
@@ -410,7 +410,7 @@ mod tests {
         });
 
         if let RsLookupMetadataResult::Serie(serie) = result.metadata {
-            assert_eq!(serie.id, "tmdb:1396");
+            assert_eq!(serie.id, "1396");
             assert_eq!(serie.name, "Breaking Bad");
             assert_eq!(serie.tmdb, Some(1396));
             assert_eq!(serie.year, Some(2008));
@@ -454,9 +454,9 @@ mod tests {
             .and_then(|r| r.people_details.as_ref())
             .expect("expected people");
         assert_eq!(people.len(), 3);
-        assert_eq!(people[0].id, "tmdb-person:819");
+        assert_eq!(people[0].id, "819");
         assert_eq!(people[0].name, "Edward Norton");
-        assert_eq!(people[2].id, "tmdb-person:7467");
+        assert_eq!(people[2].id, "7467");
         assert_eq!(people[2].name, "David Fincher");
     }
 
@@ -613,6 +613,6 @@ mod tests {
             }],
         );
         assert_eq!(people.len(), 1);
-        assert_eq!(people[0].id, "tmdb-person:100");
+        assert_eq!(people[0].id, "100");
     }
 }
