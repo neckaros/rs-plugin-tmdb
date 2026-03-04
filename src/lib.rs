@@ -40,7 +40,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "tmdb_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 4,
+        version: 5,
         interface_version: 1,
         repo: Some("https://github.com/neckaros/rs-plugin-tmdb".to_string()),
         publisher: "neckaros".into(),
@@ -172,17 +172,12 @@ fn resolve_movie_lookup_target(movie: &RsLookupMovie) -> Option<LookupTarget> {
 
     // Check ids.tmdb
     if let Some(ids) = movie.ids.as_ref() {
-        if let Some(tmdb_id) = ids.tmdb {
+        if let Some(tmdb_id) = ids.tmdb() {
             return Some(LookupTarget::DirectMovie(tmdb_id));
         }
 
-        // Check other_ids for "tmdb:12345" patterns
-        if let Some(id) = ids.other_ids.as_ref().and_then(|other_ids| {
-            other_ids
-                .as_slice()
-                .iter()
-                .find_map(|value| parse_tmdb_id(value).map(|(id, mt)| (id, mt)))
-        }) {
+        // Check all IDs for "tmdb:12345" patterns
+        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_tmdb_id(value)) {
             return Some(match id.1 {
                 Some(TmdbMediaType::Tv) => LookupTarget::DirectTv(id.0),
                 _ => LookupTarget::DirectMovie(id.0),
@@ -213,16 +208,11 @@ fn resolve_serie_lookup_target(serie: &RsLookupSerie) -> Option<LookupTarget> {
 
     // Check ids.tmdb
     if let Some(ids) = serie.ids.as_ref() {
-        if let Some(tmdb_id) = ids.tmdb {
+        if let Some(tmdb_id) = ids.tmdb() {
             return Some(LookupTarget::DirectTv(tmdb_id));
         }
 
-        if let Some(id) = ids.other_ids.as_ref().and_then(|other_ids| {
-            other_ids
-                .as_slice()
-                .iter()
-                .find_map(|value| parse_tmdb_id(value).map(|(id, mt)| (id, mt)))
-        }) {
+        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_tmdb_id(value)) {
             return Some(match id.1 {
                 Some(TmdbMediaType::Movie) => LookupTarget::DirectMovie(id.0),
                 _ => LookupTarget::DirectTv(id.0),
@@ -247,7 +237,7 @@ fn resolve_person_lookup_target(person: &RsLookupPerson) -> Option<PersonLookupT
     }
 
     if let Some(ids) = person.ids.as_ref() {
-        if let Some(tmdb_id) = ids.tmdb {
+        if let Some(tmdb_id) = ids.tmdb() {
             return Some(PersonLookupTarget::DirectPerson(tmdb_id));
         }
     }
@@ -603,10 +593,7 @@ mod tests {
     fn resolve_movie_target_reads_ids_tmdb() {
         let movie = RsLookupMovie {
             name: Some("some name".to_string()),
-            ids: Some(RsIds {
-                tmdb: Some(550),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::from_tmdb(550)),
             page_key: None,
         };
 
@@ -621,10 +608,7 @@ mod tests {
     fn resolve_movie_target_reads_other_ids() {
         let movie = RsLookupMovie {
             name: Some("ignored".to_string()),
-            ids: Some(RsIds {
-                other_ids: Some(vec!["tmdb:550".to_string()].into()),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::try_from(vec!["tmdb:550".to_string()]).unwrap()),
             page_key: None,
         };
 

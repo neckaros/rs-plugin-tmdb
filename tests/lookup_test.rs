@@ -300,10 +300,7 @@ fn test_lookup_person_tmdb_5719226() {
     let input = RsLookupWrapper {
         query: RsLookupQuery::Person(RsLookupPerson {
             name: Some("tmdb:5719226".to_string()),
-            ids: Some(RsIds {
-                tmdb: Some(5719226),
-                ..Default::default()
-            }),
+            ids: Some(RsIds::from_tmdb(5719226)),
             page_key: None,
         }),
         credential: None,
