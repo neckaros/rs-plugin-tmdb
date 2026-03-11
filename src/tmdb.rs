@@ -197,6 +197,12 @@ pub struct TmdbPersonImages {
     pub profiles: Option<Vec<TmdbImage>>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct TmdbEpisodeImagesResponse {
+    #[serde(default)]
+    pub stills: Vec<TmdbImage>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TmdbPersonResult {
     pub id: u64,
@@ -259,6 +265,17 @@ pub fn build_person_detail_url(api_key: &str, person_id: u64) -> String {
     format!(
         "https://api.themoviedb.org/3/person/{person_id}?api_key={api_key}&append_to_response=images"
     )
+}
+
+pub fn build_episode_images_url(api_key: &str, tv_id: u64, season: u32, episode: u32) -> String {
+    format!(
+        "https://api.themoviedb.org/3/tv/{tv_id}/season/{season}/episode/{episode}/images?api_key={api_key}"
+    )
+}
+
+pub fn parse_episode_images_json(json: &str) -> Option<Vec<TmdbImage>> {
+    let response: TmdbEpisodeImagesResponse = serde_json::from_str(json).ok()?;
+    Some(response.stills)
 }
 
 pub fn build_person_search_url(api_key: &str, query: &str, page: Option<u32>) -> Option<String> {
@@ -628,6 +645,45 @@ mod tests {
         assert_eq!(parse_tmdb_id(""), None);
         assert_eq!(parse_tmdb_id("some random text"), None);
         assert_eq!(parse_tmdb_id("tmdb:abc"), None);
+    }
+
+    #[test]
+    fn build_episode_images_url_basic() {
+        let url = build_episode_images_url("test_key", 1396, 1, 1);
+        assert_eq!(
+            url,
+            "https://api.themoviedb.org/3/tv/1396/season/1/episode/1/images?api_key=test_key"
+        );
+    }
+
+    #[test]
+    fn parse_episode_images_json_basic() {
+        let json = r#"{
+            "id": 62085,
+            "stills": [
+                {
+                    "file_path": "/still1.jpg",
+                    "width": 1280,
+                    "height": 720,
+                    "aspect_ratio": 1.778,
+                    "vote_average": 5.5,
+                    "vote_count": 10,
+                    "iso_639_1": null
+                }
+            ]
+        }"#;
+        let stills = parse_episode_images_json(json).expect("parse");
+        assert_eq!(stills.len(), 1);
+        assert_eq!(stills[0].file_path, "/still1.jpg");
+        assert_eq!(stills[0].width, Some(1280));
+        assert_eq!(stills[0].height, Some(720));
+    }
+
+    #[test]
+    fn parse_episode_images_json_empty_stills() {
+        let json = r#"{"id": 123, "stills": []}"#;
+        let stills = parse_episode_images_json(json).expect("parse");
+        assert!(stills.is_empty());
     }
 
     #[test]

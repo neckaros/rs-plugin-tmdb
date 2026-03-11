@@ -125,7 +125,7 @@ pub fn tmdb_result_to_images(item: &TmdbResult) -> Vec<ExternalImage> {
     images
 }
 
-fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage {
+pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage {
     ExternalImage {
         kind: Some(kind),
         url: RsRequest {
@@ -286,6 +286,13 @@ pub fn tmdb_person_to_images(item: &TmdbPersonResult) -> Vec<ExternalImage> {
     }
 
     images
+}
+
+pub fn tmdb_episode_stills_to_images(stills: &[TmdbImage]) -> Vec<ExternalImage> {
+    stills
+        .iter()
+        .map(|img| tmdb_image_to_external(img, ImageType::Still))
+        .collect()
 }
 
 fn parse_date_to_timestamp(date: &str) -> Option<i64> {
@@ -594,6 +601,43 @@ mod tests {
             Some(SerieStatus::Canceled)
         ));
         assert!(matches!(map_serie_status(&None), None));
+    }
+
+    #[test]
+    fn maps_stills_to_images() {
+        let stills = vec![
+            crate::tmdb::TmdbImage {
+                file_path: "/still1.jpg".to_string(),
+                width: Some(1280),
+                height: Some(720),
+                aspect_ratio: Some(1.778),
+                vote_average: Some(5.5),
+                vote_count: Some(10),
+                iso_639_1: None,
+                ..Default::default()
+            },
+            crate::tmdb::TmdbImage {
+                file_path: "/still2.jpg".to_string(),
+                width: Some(1920),
+                height: Some(1080),
+                ..Default::default()
+            },
+        ];
+
+        let images = tmdb_episode_stills_to_images(&stills);
+        assert_eq!(images.len(), 2);
+        assert_eq!(images[0].kind, Some(ImageType::Still));
+        assert_eq!(
+            images[0].url.url,
+            "https://image.tmdb.org/t/p/original/still1.jpg"
+        );
+        assert_eq!(images[0].width, Some(1280));
+        assert_eq!(images[0].height, Some(720));
+        assert_eq!(images[1].kind, Some(ImageType::Still));
+        assert_eq!(
+            images[1].url.url,
+            "https://image.tmdb.org/t/p/original/still2.jpg"
+        );
     }
 
     #[test]

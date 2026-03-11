@@ -2,8 +2,8 @@ use extism::*;
 use rs_plugin_common_interfaces::{
     domain::{external_images::ExternalImage, rs_ids::RsIds},
     lookup::{
-        RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie, RsLookupPerson,
-        RsLookupQuery, RsLookupSerie, RsLookupWrapper,
+        RsLookupEpisode, RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie,
+        RsLookupPerson, RsLookupQuery, RsLookupSerie, RsLookupWrapper,
     },
 };
 
@@ -334,6 +334,47 @@ fn test_lookup_person_tmdb_5719226() {
         Err(e) => {
             println!("Error for person tmdb:5719226: {}", e);
         }
+    }
+}
+
+#[test]
+fn test_lookup_episode_images() {
+    let mut plugin = build_plugin();
+
+    // Breaking Bad S01E01 (TMDB TV ID 1396)
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Episode(RsLookupEpisode {
+            name: None,
+            ids: Some(RsIds::from_tmdb(1396)),
+            season: 1,
+            number: Some(1),
+            ..Default::default()
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let images = call_lookup_images(&mut plugin, &input);
+    assert!(
+        !images.is_empty(),
+        "Expected at least one still image for Breaking Bad S01E01"
+    );
+
+    for img in &images {
+        assert_eq!(
+            img.kind,
+            Some(rs_plugin_common_interfaces::domain::external_images::ImageType::Still),
+            "Expected all episode images to be Stills"
+        );
+        assert!(
+            img.url.url.starts_with("https://image.tmdb.org/t/p/original/"),
+            "Expected TMDB image URL"
+        );
+    }
+
+    println!("Got {} still images for Breaking Bad S01E01", images.len());
+    for img in images.iter().take(3) {
+        println!("  {:?}: {}", img.kind, img.url.url);
     }
 }
 

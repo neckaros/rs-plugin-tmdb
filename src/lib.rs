@@ -10,16 +10,18 @@ use rs_plugin_common_interfaces::{
     CredentialType, PluginInformation, PluginType,
 };
 
+
+
 mod convert;
 mod tmdb;
 
-use convert::{tmdb_person_to_images, tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata};
+use convert::{tmdb_episode_stills_to_images, tmdb_person_to_images, tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata};
 use tmdb::{
-    build_movie_detail_url, build_movie_search_url, build_person_detail_url,
-    build_person_search_url, build_tv_detail_url, build_tv_search_url, parse_movie_detail_json,
-    parse_movie_search_json, parse_person_detail_json, parse_person_search_json, parse_tmdb_id,
-    parse_tmdb_person_id, parse_tv_detail_json, parse_tv_search_json, TmdbMediaType,
-    TmdbPersonResult, TmdbResult,
+    build_episode_images_url, build_movie_detail_url, build_movie_search_url,
+    build_person_detail_url, build_person_search_url, build_tv_detail_url, build_tv_search_url,
+    parse_episode_images_json, parse_movie_detail_json, parse_movie_search_json,
+    parse_person_detail_json, parse_person_search_json, parse_tmdb_id, parse_tmdb_person_id,
+    parse_tv_detail_json, parse_tv_search_json, TmdbMediaType, TmdbPersonResult, TmdbResult,
 };
 
 enum LookupTarget {
@@ -40,7 +42,7 @@ pub fn infos() -> FnResult<Json<PluginInformation>> {
     Ok(Json(PluginInformation {
         name: "tmdb_metadata".into(),
         capabilities: vec![PluginType::LookupMetadata],
-        version: 5,
+        version: 6,
         interface_version: 1,
         repo: Some("https://github.com/neckaros/rs-plugin-tmdb".to_string()),
         publisher: "neckaros".into(),
@@ -156,6 +158,22 @@ fn execute_tv_detail_request(api_key: &str, tv_id: u64) -> FnResult<Option<TmdbR
     let url = build_tv_detail_url(api_key, tv_id);
     let body = execute_json_request(url)?;
     Ok(parse_tv_detail_json(&body))
+}
+
+fn execute_episode_images_request(
+    api_key: &str,
+    tv_id: u64,
+    season: u32,
+    episode: u32,
+) -> FnResult<Vec<tmdb::TmdbImage>> {
+    let url = build_episode_images_url(api_key, tv_id, season, episode);
+    let body = execute_json_request(url)?;
+    parse_episode_images_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB episode images response"),
+            500,
+        )
+    })
 }
 
 fn resolve_movie_lookup_target(movie: &RsLookupMovie) -> Option<LookupTarget> {
@@ -477,6 +495,39 @@ pub fn lookup_metadata_images(
                 img
             })
             .collect();
+        return Ok(Json(deduplicate_images(images)));
+    }
+
+    if let RsLookupQuery::Episode(ref episode) = lookup.query {
+        let tv_id = episode
+            .ids
+            .as_ref()
+            .and_then(|ids| ids.tmdb())
+            .ok_or_else(|| {
+                WithReturnCode::new(
+                    extism_pdk::Error::msg("Episode query requires a TMDB serie ID"),
+                    404,
+                )
+            })?;
+
+        let episode_number = episode.number.ok_or_else(|| {
+            WithReturnCode::new(
+                extism_pdk::Error::msg("Episode query requires an episode number"),
+                404,
+            )
+        })?;
+
+        let stills =
+            execute_episode_images_request(&api_key, tv_id, episode.season, episode_number)?;
+
+        let images: Vec<ExternalImage> = tmdb_episode_stills_to_images(&stills)
+            .into_iter()
+            .map(|mut img| {
+                img.match_type = Some(RsLookupMatchType::ExactId);
+                img
+            })
+            .collect();
+
         return Ok(Json(deduplicate_images(images)));
     }
 
