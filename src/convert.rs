@@ -8,7 +8,7 @@ use rs_plugin_common_interfaces::{
         Relations,
     },
     lookup::{RsLookupMetadataResult, RsLookupMetadataResultWrapper},
-    RsRequest,
+    RsRequest, RsRequestStatus,
 };
 
 use crate::tmdb::{
@@ -85,6 +85,7 @@ pub fn tmdb_result_to_images(item: &TmdbResult) -> Vec<ExternalImage> {
             kind: Some(ImageType::Poster),
             url: RsRequest {
                 url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                status: RsRequestStatus::FinalPublic,
                 ..Default::default()
             },
             ..Default::default()
@@ -97,6 +98,7 @@ pub fn tmdb_result_to_images(item: &TmdbResult) -> Vec<ExternalImage> {
             kind: Some(ImageType::Background),
             url: RsRequest {
                 url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                status: RsRequestStatus::FinalPublic,
                 ..Default::default()
             },
             ..Default::default()
@@ -130,6 +132,7 @@ pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage
         kind: Some(kind),
         url: RsRequest {
             url: build_image_url(&img.file_path, TMDB_IMAGE_SIZE_ORIGINAL),
+            status: RsRequestStatus::FinalPublic,
             ..Default::default()
         },
         width: img.width.map(|w| w as i64),
@@ -210,6 +213,7 @@ pub fn tmdb_person_to_metadata(item: TmdbPersonResult) -> RsLookupMetadataResult
             kind: Some(ImageType::Poster),
             url: RsRequest {
                 url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                status: RsRequestStatus::FinalPublic,
                 ..Default::default()
             },
             ..Default::default()
@@ -271,6 +275,7 @@ pub fn tmdb_person_to_images(item: &TmdbPersonResult) -> Vec<ExternalImage> {
             kind: Some(ImageType::Poster),
             url: RsRequest {
                 url: build_image_url(path, TMDB_IMAGE_SIZE_ORIGINAL),
+                status: RsRequestStatus::FinalPublic,
                 ..Default::default()
             },
             ..Default::default()

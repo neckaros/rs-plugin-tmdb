@@ -374,7 +374,7 @@ fn test_lookup_episode_images() {
 
     println!("Got {} still images for Breaking Bad S01E01", images.len());
     for img in images.iter().take(3) {
-        println!("  {:?}: {}", img.kind, img.url.url);
+        println!("  {:?}: {} (status: {:?})", img.kind, img.url.url, img.url.status);
     }
 }
 
