@@ -1,5 +1,6 @@
 use rs_plugin_common_interfaces::{
     domain::{
+        episode::Episode,
         external_images::{ExternalImage, ImageType},
         movie::{Movie, MovieStatus},
         person::Person,
@@ -13,7 +14,7 @@ use rs_plugin_common_interfaces::{
 
 use crate::tmdb::{
     build_image_url, TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImage, TmdbMediaType,
-    TmdbPersonResult, TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
+    TmdbEpisodeResult, TmdbPersonResult, TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
 };
 
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
@@ -125,6 +126,28 @@ pub fn tmdb_result_to_images(item: &TmdbResult) -> Vec<ExternalImage> {
     }
 
     images
+}
+
+pub fn tmdb_episode_to_metadata(
+    serie_id: String,
+    item: TmdbEpisodeResult,
+) -> RsLookupMetadataResultWrapper {
+    let episode = Episode {
+        serie: serie_id,
+        season: item.season_number,
+        number: item.episode_number,
+        name: item.name,
+        overview: item.overview,
+        airdate: item.air_date.as_deref().and_then(parse_date_to_timestamp),
+        duration: item.runtime.map(|runtime| runtime as u64),
+        tmdb: Some(item.id),
+        ..Default::default()
+    };
+
+    RsLookupMetadataResultWrapper {
+        metadata: RsLookupMetadataResult::Episode(episode),
+        ..Default::default()
+    }
 }
 
 pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage {

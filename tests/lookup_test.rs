@@ -379,6 +379,39 @@ fn test_lookup_episode_images() {
 }
 
 #[test]
+fn test_lookup_episode_metadata_by_tmdb_show_id() {
+    let mut plugin = build_plugin();
+
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Episode(RsLookupEpisode {
+            name: None,
+            ids: Some(RsIds::from_tmdb(1396)),
+            season: 1,
+            number: None,
+            ..Default::default()
+        }),
+        credential: None,
+        params: None,
+    };
+
+    let results = call_lookup(&mut plugin, &input);
+    assert!(
+        !results.results.is_empty(),
+        "Expected episode metadata results for TMDB TV ID 1396 season 1"
+    );
+
+    let first = &results.results[0];
+    let episode = match &first.metadata {
+        RsLookupMetadataResult::Episode(episode) => episode,
+        _ => panic!("Expected Episode metadata"),
+    };
+
+    assert_eq!(episode.season, 1);
+    assert!(episode.number >= 1);
+    assert_eq!(first.match_type, Some(rs_plugin_common_interfaces::lookup::RsLookupMatchType::ExactId));
+}
+
+#[test]
 fn test_lookup_empty_movie_name_returns_error() {
     let mut plugin = build_plugin();
 

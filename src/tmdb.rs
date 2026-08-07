@@ -219,6 +219,17 @@ pub struct TmdbPersonResult {
     pub images: Vec<TmdbImage>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TmdbEpisodeResult {
+    pub id: u64,
+    pub season_number: u32,
+    pub episode_number: u32,
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    pub air_date: Option<String>,
+    pub runtime: Option<u32>,
+}
+
 // --- Public functions ---
 
 pub fn build_image_url(file_path: &str, size: &str) -> String {
@@ -273,9 +284,48 @@ pub fn build_episode_images_url(api_key: &str, tv_id: u64, season: u32, episode:
     )
 }
 
+pub fn build_tv_season_detail_url(api_key: &str, tv_id: u64, season: u32) -> String {
+    format!("https://api.themoviedb.org/3/tv/{tv_id}/season/{season}?api_key={api_key}")
+}
+
 pub fn parse_episode_images_json(json: &str) -> Option<Vec<TmdbImage>> {
     let response: TmdbEpisodeImagesResponse = serde_json::from_str(json).ok()?;
     Some(response.stills)
+}
+
+pub fn parse_tv_season_detail_json(json: &str) -> Option<Vec<TmdbEpisodeResult>> {
+    #[derive(Debug, Deserialize)]
+    struct TmdbSeasonEpisode {
+        id: u64,
+        season_number: u32,
+        episode_number: u32,
+        name: Option<String>,
+        overview: Option<String>,
+        air_date: Option<String>,
+        runtime: Option<u32>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TmdbSeasonDetail {
+        episodes: Vec<TmdbSeasonEpisode>,
+    }
+
+    let response: TmdbSeasonDetail = serde_json::from_str(json).ok()?;
+    Some(
+        response
+            .episodes
+            .into_iter()
+            .map(|episode| TmdbEpisodeResult {
+                id: episode.id,
+                season_number: episode.season_number,
+                episode_number: episode.episode_number,
+                name: episode.name,
+                overview: episode.overview,
+                air_date: episode.air_date,
+                runtime: episode.runtime,
+            })
+            .collect(),
+    )
 }
 
 pub fn build_person_search_url(api_key: &str, query: &str, page: Option<u32>) -> Option<String> {
@@ -657,6 +707,15 @@ mod tests {
     }
 
     #[test]
+    fn build_tv_season_detail_url_basic() {
+        let url = build_tv_season_detail_url("test_key", 1396, 1);
+        assert_eq!(
+            url,
+            "https://api.themoviedb.org/3/tv/1396/season/1?api_key=test_key"
+        );
+    }
+
+    #[test]
     fn parse_episode_images_json_basic() {
         let json = r#"{
             "id": 62085,
@@ -684,6 +743,31 @@ mod tests {
         let json = r#"{"id": 123, "stills": []}"#;
         let stills = parse_episode_images_json(json).expect("parse");
         assert!(stills.is_empty());
+    }
+
+    #[test]
+    fn parse_tv_season_detail_json_basic() {
+        let json = r#"{
+            "id": 3572,
+            "episodes": [
+                {
+                    "id": 62085,
+                    "season_number": 1,
+                    "episode_number": 1,
+                    "name": "Pilot",
+                    "overview": "Walter White starts cooking.",
+                    "air_date": "2008-01-20",
+                    "runtime": 58
+                }
+            ]
+        }"#;
+
+        let episodes = parse_tv_season_detail_json(json).expect("parse");
+        assert_eq!(episodes.len(), 1);
+        assert_eq!(episodes[0].id, 62085);
+        assert_eq!(episodes[0].season_number, 1);
+        assert_eq!(episodes[0].episode_number, 1);
+        assert_eq!(episodes[0].name.as_deref(), Some("Pilot"));
     }
 
     #[test]
