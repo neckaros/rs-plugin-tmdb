@@ -212,6 +212,7 @@ fn test_lookup_tv_direct_id() {
     };
 
     assert_eq!(serie.tmdb, Some(1396), "Expected tmdb ID 1396");
+    assert_eq!(serie.tvdb, Some(81189), "Expected tvdb ID 81189");
     println!("Direct TV ID lookup: {} (tmdb:1396)", serie.name);
 }
 

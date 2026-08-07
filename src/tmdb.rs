@@ -28,6 +28,7 @@ pub struct TmdbResult {
 
     // Detail-only fields
     pub imdb_id: Option<String>,
+    pub tvdb_id: Option<u64>,
     pub runtime: Option<u32>,
     pub status: Option<String>,
     pub tagline: Option<String>,
@@ -158,6 +159,12 @@ pub struct TmdbTvDetail {
     pub popularity: Option<f64>,
     pub credits: Option<TmdbCredits>,
     pub images: Option<TmdbImagesResponse>,
+    pub external_ids: Option<TmdbTvExternalIds>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TmdbTvExternalIds {
+    pub tvdb_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -268,7 +275,7 @@ pub fn build_movie_detail_url(api_key: &str, movie_id: u64) -> String {
 
 pub fn build_tv_detail_url(api_key: &str, tv_id: u64) -> String {
     format!(
-        "https://api.themoviedb.org/3/tv/{tv_id}?api_key={api_key}&append_to_response=credits,images"
+        "https://api.themoviedb.org/3/tv/{tv_id}?api_key={api_key}&append_to_response=credits,images,external_ids"
     )
 }
 
@@ -522,6 +529,7 @@ fn movie_detail_to_result(detail: TmdbMovieDetail) -> TmdbResult {
 fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
     let credits = detail.credits.unwrap_or_default();
     let images_resp = detail.images.unwrap_or_default();
+    let external_ids = detail.external_ids.unwrap_or_default();
     let runtime = detail
         .episode_run_time
         .as_ref()
@@ -540,6 +548,7 @@ fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
         vote_count: detail.vote_count,
         original_language: detail.original_language,
         genres: detail.genres.unwrap_or_default(),
+        tvdb_id: external_ids.tvdb_id,
         runtime,
         status: detail.status,
         tagline: detail.tagline,
@@ -651,7 +660,7 @@ mod tests {
         let url = build_tv_detail_url("test_key", 1396);
         assert_eq!(
             url,
-            "https://api.themoviedb.org/3/tv/1396?api_key=test_key&append_to_response=credits,images"
+            "https://api.themoviedb.org/3/tv/1396?api_key=test_key&append_to_response=credits,images,external_ids"
         );
     }
 
@@ -825,6 +834,23 @@ mod tests {
         let (results, next_page) = parse_movie_search_json(json).expect("parse");
         assert!(results.is_empty());
         assert_eq!(next_page, None);
+    }
+
+    #[test]
+    fn parse_tv_detail_json_reads_tvdb_external_id() {
+        let json = r#"{
+            "id": 1396,
+            "name": "Breaking Bad",
+            "first_air_date": "2008-01-20",
+            "status": "Ended",
+            "external_ids": {
+                "tvdb_id": 81189
+            }
+        }"#;
+
+        let result = parse_tv_detail_json(json).expect("parse");
+        assert_eq!(result.id, 1396);
+        assert_eq!(result.tvdb_id, Some(81189));
     }
 
     #[test]
