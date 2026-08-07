@@ -11,6 +11,7 @@ use rs_plugin_common_interfaces::{
     lookup::{RsLookupMetadataResult, RsLookupMetadataResultWrapper},
     RsRequest, RsRequestStatus,
 };
+use chrono::NaiveDate;
 
 use crate::tmdb::{
     build_image_url, TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImage, TmdbMediaType,
@@ -325,23 +326,12 @@ pub fn tmdb_episode_stills_to_images(stills: &[TmdbImage]) -> Vec<ExternalImage>
 }
 
 fn parse_date_to_timestamp(date: &str) -> Option<i64> {
-    let parts: Vec<&str> = date.split('-').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-    let year: i32 = parts[0].parse().ok()?;
-    let month: u32 = parts[1].parse().ok()?;
-    let day: u32 = parts[2].parse().ok()?;
-
-    if month == 0 || month > 12 || day == 0 || day > 31 {
-        return None;
-    }
-
-    // Approximate: days since Unix epoch
-    let days_from_year = (year as i64 - 1970) * 365 + ((year as i64 - 1969) / 4);
-    let month_days: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    let days = days_from_year + month_days[(month - 1) as usize] + day as i64 - 1;
-    Some(days * 86400)
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .ok()?
+        .and_hms_opt(0, 0, 0)?
+        .and_utc()
+        .timestamp_millis()
+        .into()
 }
 
 fn map_tmdb_gender(gender: u8) -> Option<rs_plugin_common_interfaces::Gender> {
@@ -598,6 +588,18 @@ mod tests {
         );
         assert_eq!(parse_year_from_date(&None), None);
         assert_eq!(parse_year_from_date(&Some("".to_string())), None);
+    }
+
+    #[test]
+    fn parse_date_to_timestamp_returns_milliseconds() {
+        assert_eq!(
+            parse_date_to_timestamp("2021-09-23"),
+            Some(1632355200000)
+        );
+        assert_eq!(
+            parse_date_to_timestamp("2024-09-20"),
+            Some(1726790400000)
+        );
     }
 
     #[test]
