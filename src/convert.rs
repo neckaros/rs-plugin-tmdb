@@ -31,6 +31,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
                 kind: Some(SerieType::Tv),
                 year: parse_year_from_date(&item.release_date),
                 tmdb: Some(item.id),
+                imdb: item.imdb_id,
                 tvdb: item.tvdb_id,
                 status: map_serie_status(&item.status),
                 ..Default::default()
@@ -432,6 +433,7 @@ mod tests {
             title: "Breaking Bad".to_string(),
             release_date: Some("2008-01-20".to_string()),
             status: Some("Ended".to_string()),
+            imdb_id: Some("tt0903747".to_string()),
             tvdb_id: Some(81189),
             ..Default::default()
         });
@@ -440,6 +442,7 @@ mod tests {
             assert_eq!(serie.id, "tmdb:1396");
             assert_eq!(serie.name, "Breaking Bad");
             assert_eq!(serie.tmdb, Some(1396));
+            assert_eq!(serie.imdb, Some("tt0903747".to_string()));
             assert_eq!(serie.tvdb, Some(81189));
             assert_eq!(serie.year, Some(2008));
             assert_eq!(serie.kind, Some(SerieType::Tv));

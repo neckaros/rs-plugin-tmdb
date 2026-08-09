@@ -164,6 +164,7 @@ pub struct TmdbTvDetail {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct TmdbTvExternalIds {
+    pub imdb_id: Option<String>,
     pub tvdb_id: Option<u64>,
 }
 
@@ -548,6 +549,7 @@ fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
         vote_count: detail.vote_count,
         original_language: detail.original_language,
         genres: detail.genres.unwrap_or_default(),
+        imdb_id: external_ids.imdb_id,
         tvdb_id: external_ids.tvdb_id,
         runtime,
         status: detail.status,
@@ -837,19 +839,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_tv_detail_json_reads_tvdb_external_id() {
+    fn parse_tv_detail_json_reads_external_ids() {
         let json = r#"{
             "id": 1396,
             "name": "Breaking Bad",
             "first_air_date": "2008-01-20",
             "status": "Ended",
             "external_ids": {
+                "imdb_id": "tt0903747",
                 "tvdb_id": 81189
             }
         }"#;
 
         let result = parse_tv_detail_json(json).expect("parse");
         assert_eq!(result.id, 1396);
+        assert_eq!(result.imdb_id, Some("tt0903747".to_string()));
         assert_eq!(result.tvdb_id, Some(81189));
     }
 
