@@ -121,9 +121,14 @@ fn test_lookup_movie_direct_id() {
     assert_eq!(movie.tmdb, Some(550), "Expected tmdb ID 550");
     assert!(movie.imdb.is_some(), "Expected IMDB ID for detail lookup");
     assert!(movie.duration.is_some(), "Expected runtime for detail lookup");
+    assert!(movie.airdate.is_some(), "Expected theatrical release date");
+    assert!(
+        movie.digitalairdate.is_some(),
+        "Expected digital release date"
+    );
     println!(
-        "Direct ID lookup: {} (imdb: {:?}, runtime: {:?})",
-        movie.name, movie.imdb, movie.duration
+        "Direct ID lookup: {} (imdb: {:?}, runtime: {:?}, airdate: {:?}, digitalairdate: {:?})",
+        movie.name, movie.imdb, movie.duration, movie.airdate, movie.digitalairdate
     );
 
     // Check for people (cast/crew)

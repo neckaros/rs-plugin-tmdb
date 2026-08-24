@@ -43,6 +43,15 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
                 id: format!("tmdb:{}", item.id),
                 name: item.title,
                 year: parse_year_from_date(&item.release_date),
+                airdate: item
+                    .theatrical_release_date
+                    .as_deref()
+                    .or(item.release_date.as_deref())
+                    .and_then(parse_date_to_timestamp),
+                digitalairdate: item
+                    .digital_release_date
+                    .as_deref()
+                    .and_then(parse_date_to_timestamp),
                 overview: item.overview,
                 duration: item.runtime,
                 tmdb: Some(item.id),
@@ -395,6 +404,8 @@ mod tests {
             original_title: Some("Fight Club".to_string()),
             overview: Some("An insomniac.".to_string()),
             release_date: Some("1999-10-15".to_string()),
+            theatrical_release_date: Some("1999-10-15".to_string()),
+            digital_release_date: Some("2000-06-06".to_string()),
             poster_path: Some("/poster.jpg".to_string()),
             imdb_id: Some("tt0137523".to_string()),
             runtime: Some(139),
@@ -409,6 +420,8 @@ mod tests {
             assert_eq!(movie.tmdb, Some(550));
             assert_eq!(movie.imdb, Some("tt0137523".to_string()));
             assert_eq!(movie.year, Some(1999));
+            assert_eq!(movie.airdate, Some(939945600000));
+            assert_eq!(movie.digitalairdate, Some(960249600000));
             assert_eq!(movie.duration, Some(139));
             assert_eq!(movie.lang, Some("en".to_string()));
             assert_eq!(movie.original, Some("Fight Club".to_string()));

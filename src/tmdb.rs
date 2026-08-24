@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use regex::Regex;
 use serde::Deserialize;
 
@@ -18,6 +19,8 @@ pub struct TmdbResult {
     pub original_title: Option<String>,
     pub overview: Option<String>,
     pub release_date: Option<String>,
+    pub theatrical_release_date: Option<String>,
+    pub digital_release_date: Option<String>,
     pub poster_path: Option<String>,
     pub backdrop_path: Option<String>,
     pub vote_average: Option<f64>,
@@ -136,6 +139,26 @@ pub struct TmdbMovieDetail {
     pub popularity: Option<f64>,
     pub credits: Option<TmdbCredits>,
     pub images: Option<TmdbImagesResponse>,
+    pub release_dates: Option<TmdbReleaseDatesResponse>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TmdbReleaseDatesResponse {
+    #[serde(default)]
+    pub results: Vec<TmdbReleaseDatesByCountry>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TmdbReleaseDatesByCountry {
+    #[serde(default)]
+    pub release_dates: Vec<TmdbReleaseDate>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbReleaseDate {
+    pub release_date: String,
+    #[serde(rename = "type")]
+    pub kind: u8,
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,7 +293,7 @@ pub fn build_tv_search_url(api_key: &str, query: &str, page: Option<u32>) -> Opt
 
 pub fn build_movie_detail_url(api_key: &str, movie_id: u64) -> String {
     format!(
-        "https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&append_to_response=credits,images"
+        "https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&append_to_response=credits,images,release_dates"
     )
 }
 
@@ -497,6 +520,8 @@ fn search_item_to_result(item: TmdbSearchItem, media_type: TmdbMediaType) -> Tmd
 fn movie_detail_to_result(detail: TmdbMovieDetail) -> TmdbResult {
     let credits = detail.credits.unwrap_or_default();
     let images_resp = detail.images.unwrap_or_default();
+    let theatrical_release_date = earliest_release_date(&detail.release_dates, 3);
+    let digital_release_date = earliest_release_date(&detail.release_dates, 4);
 
     TmdbResult {
         media_type: Some(TmdbMediaType::Movie),
@@ -505,6 +530,8 @@ fn movie_detail_to_result(detail: TmdbMovieDetail) -> TmdbResult {
         original_title: detail.original_title,
         overview: detail.overview,
         release_date: detail.release_date,
+        theatrical_release_date,
+        digital_release_date,
         poster_path: detail.poster_path,
         backdrop_path: detail.backdrop_path,
         vote_average: detail.vote_average,
@@ -525,6 +552,26 @@ fn movie_detail_to_result(detail: TmdbMovieDetail) -> TmdbResult {
         },
         ..Default::default()
     }
+}
+
+fn earliest_release_date(
+    release_dates: &Option<TmdbReleaseDatesResponse>,
+    kind: u8,
+) -> Option<String> {
+    release_dates
+        .as_ref()?
+        .results
+        .iter()
+        .flat_map(|country| country.release_dates.iter())
+        .filter(|release| release.kind == kind)
+        .filter_map(|release| {
+            let date = release.release_date.get(..10)?;
+            NaiveDate::parse_from_str(date, "%Y-%m-%d")
+                .ok()
+                .map(|parsed| (parsed, date))
+        })
+        .min_by_key(|(date, _)| *date)
+        .map(|(_, date)| date.to_string())
 }
 
 fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
@@ -653,7 +700,7 @@ mod tests {
         let url = build_movie_detail_url("test_key", 550);
         assert_eq!(
             url,
-            "https://api.themoviedb.org/3/movie/550?api_key=test_key&append_to_response=credits,images"
+            "https://api.themoviedb.org/3/movie/550?api_key=test_key&append_to_response=credits,images,release_dates"
         );
     }
 
@@ -922,6 +969,25 @@ mod tests {
                 "posters": [{"file_path": "/poster1.jpg", "width": 500, "height": 750}],
                 "backdrops": [{"file_path": "/bg1.jpg", "width": 1920, "height": 1080}],
                 "logos": []
+            },
+            "release_dates": {
+                "results": [
+                    {
+                        "iso_3166_1": "US",
+                        "release_dates": [
+                            {"release_date": "2000-06-06T00:00:00.000Z", "type": 4},
+                            {"release_date": "1999-10-15T00:00:00.000Z", "type": 3}
+                        ]
+                    },
+                    {
+                        "iso_3166_1": "GB",
+                        "release_dates": [
+                            {"release_date": "2000-05-01T00:00:00.000Z", "type": 4},
+                            {"release_date": "not-a-date", "type": 4},
+                            {"release_date": "1999-11-12T00:00:00.000Z", "type": 3}
+                        ]
+                    }
+                ]
             }
         }"#;
 
@@ -940,6 +1006,27 @@ mod tests {
         assert_eq!(result.crew[0].name, "David Fincher");
         assert_eq!(result.images.posters.len(), 1);
         assert_eq!(result.images.backdrops.len(), 1);
+        assert_eq!(
+            result.theatrical_release_date,
+            Some("1999-10-15".to_string())
+        );
+        assert_eq!(
+            result.digital_release_date,
+            Some("2000-05-01".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_movie_detail_json_handles_missing_release_dates() {
+        let json = r#"{
+            "id": 550,
+            "title": "Fight Club",
+            "release_date": "1999-10-15"
+        }"#;
+
+        let result = parse_movie_detail_json(json).expect("parse");
+        assert_eq!(result.theatrical_release_date, None);
+        assert_eq!(result.digital_release_date, None);
     }
 
     #[test]
