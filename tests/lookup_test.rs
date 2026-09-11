@@ -471,3 +471,56 @@ fn test_lookup_person_type_uses_canonical_string() {
     );
     assert_eq!(serde_json::to_value(person).unwrap()["type"], "Actor");
 }
+
+#[test]
+fn test_lookup_people_selection_for_movies_and_shows() {
+    use rs_plugin_common_interfaces::domain::person::PersonType;
+    let cases = [
+        (
+            RsLookupQuery::Movie(RsLookupMovie {
+                ids: Some(RsIds::from_tmdb(550)),
+                ..Default::default()
+            }),
+            PersonType::Director,
+        ),
+        (
+            RsLookupQuery::Serie(RsLookupSerie {
+                ids: Some(RsIds::from_tmdb(1396)),
+                ..Default::default()
+            }),
+            PersonType::Creator,
+        ),
+    ];
+    let mut plugin = build_plugin();
+    for (query, expected_crew) in cases {
+        let results = call_lookup(
+            &mut plugin,
+            &RsLookupWrapper {
+                query,
+                credential: None,
+                params: None,
+            },
+        );
+        let people = results
+            .results
+            .into_iter()
+            .find_map(|result| {
+                result
+                    .relations
+                    .and_then(|relations| relations.people_details)
+            })
+            .expect("Expected people");
+        assert!(people
+            .iter()
+            .any(|person| person.kind.as_ref() == Some(&expected_crew)));
+        let actors = people
+            .iter()
+            .filter(|person| person.kind == Some(PersonType::Actor))
+            .count();
+        assert!((1..=10).contains(&actors));
+        assert!(people
+            .iter()
+            .all(|person| person.kind == Some(PersonType::Actor)
+                || person.kind.as_ref() == Some(&expected_crew)));
+    }
+}

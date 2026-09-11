@@ -161,8 +161,16 @@ pub struct TmdbReleaseDate {
     pub kind: u8,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct TmdbCreator {
+    pub id: u64,
+    pub name: String,
+    pub profile_path: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TmdbTvDetail {
+    pub created_by: Option<Vec<TmdbCreator>>,
     pub id: u64,
     pub name: String,
     pub original_name: Option<String>,
@@ -576,6 +584,22 @@ fn earliest_release_date(
 
 fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
     let credits = detail.credits.unwrap_or_default();
+    let mut crew = credits.crew.unwrap_or_default();
+    // TMDB lists show creators separately from credits. Normalize them into
+    // explicit Creator credits before applying the show's people selection.
+    crew.extend(
+        detail
+            .created_by
+            .unwrap_or_default()
+            .into_iter()
+            .map(|creator| TmdbCrewMember {
+                id: creator.id,
+                name: creator.name,
+                job: "Creator".to_string(),
+                profile_path: creator.profile_path,
+                ..Default::default()
+            }),
+    );
     let images_resp = detail.images.unwrap_or_default();
     let external_ids = detail.external_ids.unwrap_or_default();
     let runtime = detail
@@ -605,7 +629,7 @@ fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
         number_of_seasons: detail.number_of_seasons,
         number_of_episodes: detail.number_of_episodes,
         cast: credits.cast.unwrap_or_default(),
-        crew: credits.crew.unwrap_or_default(),
+        crew,
         images: TmdbImages {
             posters: images_resp.posters.unwrap_or_default(),
             backdrops: images_resp.backdrops.unwrap_or_default(),

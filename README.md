@@ -11,8 +11,8 @@ person types as plain JSON strings (for example `"type": "Actor"`). TMDB
 as custom types; empty departments are omitted. A `Sound` department does not
 imply `Singer`.
 
-Cast summaries use `Actor`; the included director, writer/screenplay, producer,
-and creator credits use their corresponding canonical types. Full person lookup
+Cast summaries use `Actor`; movies additionally include `Director` credits,
+and shows include `Creator` credits from TMDB's `created_by` field. Full person lookup
 uses the person's primary department. Existing cast-first deduplication is
 preserved when the same person appears in both cast and crew.
 
@@ -37,10 +37,12 @@ TMDB's cast `order` (lowest first). Missing order values come last; ties and
 missing values retain provider order. Duplicate credits do not consume extra
 slots. Filtering happens before the server fetches full person details.
 
-Selected directors, writers/screenplay writers, producers, and creators are
-included separately from the cast limit, so the total can exceed 10 people.
+Movies additionally include directors only. Shows additionally include creators
+from TMDB's `created_by` field only. These are separate from the cast limit, so
+the total can exceed 10 people. Writers and producers are not imported unless
+they also qualify as selected cast, movie directors, or show creators.
 A person present in both selected cast and crew is returned once. A person
-outside the cast cutoff can still be included for a selected crew job.
+outside the cast cutoff can still qualify as a director or creator.
 
 This limits future imports. Existing people and relationships in a library
 are not removed by refresh.
