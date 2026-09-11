@@ -3,7 +3,7 @@ use rs_plugin_common_interfaces::{
         episode::Episode,
         external_images::{ExternalImage, ImageType},
         movie::{Movie, MovieStatus},
-        person::Person,
+        person::{Person, PersonType},
         serie::{Serie, SerieStatus, SerieType},
         tag::Tag,
         Relations,
@@ -20,7 +20,7 @@ use crate::tmdb::{
 
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
     let images = tmdb_result_to_images(&item);
-    let people_details = build_people_details(&item.cast, &item.crew);
+    let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
     let tag_details = build_tag_details(&item.genres);
 
     let metadata = match item.media_type.as_ref() {
@@ -180,29 +180,56 @@ pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage
     }
 }
 
-fn build_people_details(cast: &[TmdbCastMember], crew: &[TmdbCrewMember]) -> Vec<Person> {
+/// Map TMDB departments/jobs here, keeping the shared contract provider-independent.
+fn map_person_type(value: String) -> Option<PersonType> {
+    let kind = match value.trim().to_ascii_lowercase().as_str() {
+        "" => return None,
+        "acting" | "actor" => PersonType::Actor,
+        "directing" | "director" => PersonType::Director,
+        "writing" | "writer" | "screenplay" => PersonType::Writer,
+        "production" | "producer" => PersonType::Producer,
+        "creator" => PersonType::Creator,
+        _ => PersonType::from(value),
+    };
+    Some(kind)
+}
+
+const MAX_CAST_PEOPLE: usize = 10;
+
+fn build_people_details(
+    cast: &[TmdbCastMember],
+    crew: &[TmdbCrewMember],
+    media_type: Option<&TmdbMediaType>,
+) -> Vec<Person> {
     let mut people = Vec::new();
     let mut seen_ids = std::collections::HashSet::<u64>::new();
 
-    for member in cast {
+    let mut ordered_cast: Vec<_> = cast.iter().collect();
+    // Stable sorting preserves provider order for ties and missing order values.
+    ordered_cast.sort_by_key(|member| (member.order.is_none(), member.order.unwrap_or_default()));
+    for member in ordered_cast {
+        if people.len() == MAX_CAST_PEOPLE {
+            break;
+        }
         if seen_ids.insert(member.id) {
             people.push(Person {
                 id: format!("tmdb:{}", member.id),
                 name: member.name.clone(),
                 tmdb: Some(member.id),
+                kind: Some(PersonType::Actor),
                 generated: true,
                 ..Default::default()
             });
         }
     }
 
-    // Include key crew: Directors, Writers, Producers, Creators
+    let selected_job = if matches!(media_type, Some(TmdbMediaType::Tv)) {
+        "creator"
+    } else {
+        "director"
+    };
     for member in crew {
-        let job_lower = member.job.to_ascii_lowercase();
-        if !matches!(
-            job_lower.as_str(),
-            "director" | "writer" | "screenplay" | "producer" | "creator"
-        ) {
+        if !member.job.trim().eq_ignore_ascii_case(selected_job) {
             continue;
         }
         if seen_ids.insert(member.id) {
@@ -210,6 +237,7 @@ fn build_people_details(cast: &[TmdbCastMember], crew: &[TmdbCrewMember]) -> Vec
                 id: format!("tmdb:{}", member.id),
                 name: member.name.clone(),
                 tmdb: Some(member.id),
+                kind: map_person_type(member.job.clone()),
                 generated: true,
                 ..Default::default()
             });
@@ -274,7 +302,7 @@ pub fn tmdb_person_to_metadata(item: TmdbPersonResult) -> RsLookupMetadataResult
         death: item.deathday.as_deref().and_then(parse_date_to_timestamp),
         gender: item.gender.and_then(map_tmdb_gender),
         country: item.place_of_birth,
-        kind: item.known_for_department,
+        kind: item.known_for_department.and_then(map_person_type),
         alt: if item.also_known_as.is_empty() {
             None
         } else {
@@ -500,8 +528,10 @@ mod tests {
         assert_eq!(people.len(), 3);
         assert_eq!(people[0].id, "tmdb:819");
         assert_eq!(people[0].name, "Edward Norton");
+        assert_eq!(people[0].kind, Some(PersonType::Actor));
         assert_eq!(people[2].id, "tmdb:7467");
         assert_eq!(people[2].name, "David Fincher");
+        assert_eq!(people[2].kind, Some(PersonType::Director));
     }
 
     #[test]
@@ -704,8 +734,251 @@ mod tests {
                 department: "Directing".to_string(),
                 ..Default::default()
             }],
+            None,
         );
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].id, "tmdb:100");
     }
+
+    #[test]
+    fn person_departments_map_to_canonical_string_types() {
+        for (department, expected) in [
+            ("Acting", PersonType::Actor),
+            (" Directing ", PersonType::Director),
+            ("WRITING", PersonType::Writer),
+            ("Production", PersonType::Producer),
+            ("Creator", PersonType::Creator),
+            ("Sound", PersonType::Custom("Sound".into())),
+            (
+                "  Special department  ",
+                PersonType::Custom("  Special department  ".into()),
+            ),
+        ] {
+            let result = tmdb_person_to_metadata(TmdbPersonResult {
+                id: 42,
+                name: "Person".into(),
+                known_for_department: Some(department.into()),
+                ..Default::default()
+            });
+            let RsLookupMetadataResult::Person(person) = result.metadata else {
+                panic!("Expected person")
+            };
+            assert_eq!(person.kind, Some(expected.clone()));
+            let json = serde_json::to_value(&person).unwrap();
+            assert_eq!(json["type"], expected.to_string());
+            assert!(json["type"].is_string());
+        }
+        for department in [None, Some("".into()), Some("  ".into())] {
+            let result = tmdb_person_to_metadata(TmdbPersonResult {
+                known_for_department: department,
+                ..Default::default()
+            });
+            let RsLookupMetadataResult::Person(person) = result.metadata else {
+                panic!("Expected person")
+            };
+            assert_eq!(person.kind, None);
+            assert!(serde_json::to_value(person).unwrap().get("type").is_none());
+        }
+    }
+
+    #[test]
+    fn credit_summaries_use_canonical_types_and_keep_cast_deduplication() {
+        let cast = [TmdbCastMember {
+            id: 1,
+            ..Default::default()
+        }];
+        let crew = [
+            "Director",
+            "Writer",
+            "Screenplay",
+            "Producer",
+            "Creator",
+            "Camera Operator",
+            "Director",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(id, job)| TmdbCrewMember {
+            id: id as u64 + 1,
+            job: job.into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        let people = build_people_details(&cast, &crew, None);
+        assert_eq!(
+            people
+                .iter()
+                .map(|person| person.kind.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                PersonType::Actor,
+                PersonType::Director
+            ]
+        );
+        assert_eq!(
+            people
+                .iter()
+                .filter(|person| person.tmdb == Some(1))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn movies_and_shows_limit_unique_cast_by_order_and_keep_selected_crew() {
+        for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
+            let expected_crew_type = if media_type == TmdbMediaType::Tv {
+                PersonType::Creator
+            } else {
+                PersonType::Director
+            };
+            let mut cast: Vec<_> = (0..15)
+                .rev()
+                .map(|order| TmdbCastMember {
+                    id: order as u64 + 1,
+                    order: Some(order),
+                    ..Default::default()
+                })
+                .collect();
+            // Repeated credits for one actor do not consume another cast slot.
+            cast.push(TmdbCastMember {
+                id: 1,
+                order: Some(0),
+                ..Default::default()
+            });
+            cast.insert(
+                0,
+                TmdbCastMember {
+                    id: 100,
+                    order: None,
+                    ..Default::default()
+                },
+            );
+            let result = tmdb_result_to_metadata(TmdbResult {
+                media_type: Some(media_type),
+                cast,
+                crew: vec![
+                    TmdbCrewMember {
+                        id: 15, job: "Creator".into(), ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 103, job: "Producer".into(), ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 1,
+                        job: "Director".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 15,
+                        job: "Director".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 101,
+                        job: "Writer".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 102,
+                        job: "Camera Operator".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            });
+            let people = result.relations.unwrap().people_details.unwrap();
+            assert_eq!(
+                people
+                    .iter()
+                    .map(|person| person.tmdb.unwrap())
+                    .collect::<Vec<_>>(),
+                (1..=10).chain([15]).collect::<Vec<_>>()
+            );
+            assert!(people[..10]
+                .iter()
+                .all(|person| person.kind == Some(PersonType::Actor)));
+            assert_eq!(people[10].kind, Some(expected_crew_type));
+        }
+    }
+
+    #[test]
+    fn cast_order_ties_and_missing_values_keep_provider_order() {
+        let cast = [
+            (1, None),
+            (2, Some(2)),
+            (3, Some(2)),
+            (4, None),
+            (5, Some(u32::MAX)),
+        ]
+        .map(|(id, order)| TmdbCastMember {
+            id,
+            order,
+            ..Default::default()
+        });
+        let people = build_people_details(&cast, &[], None);
+        assert_eq!(
+            people
+                .iter()
+                .map(|person| person.tmdb.unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 5, 1, 4]
+        );
+        let missing: Vec<_> = (1..=12)
+            .map(|id| TmdbCastMember {
+                id,
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(
+            build_people_details(&missing, &[], None)
+                .iter()
+                .map(|person| person.tmdb.unwrap())
+                .collect::<Vec<_>>(),
+            (1..=10).collect::<Vec<_>>()
+        );
+        assert!(build_people_details(&[], &[], None).is_empty());
+    }
+
+    #[test]
+    fn show_creators_come_from_created_by_and_other_crew_are_excluded() {
+        let json = serde_json::json!({
+            "id": 42, "name": "Show",
+            "created_by": [{"id": 1, "name": "Cast and creator"}, {"id": 2, "name": "Creator"}, {"id": 2, "name": "Repeated creator"}],
+            "credits": {
+                "cast": [{"id": 1, "name": "Actor", "order": 0}],
+                "crew": [
+                    {"id": 3, "name": "Director", "job": "Director", "department": "Directing"},
+                    {"id": 4, "name": "Writer", "job": "Writer", "department": "Writing"},
+                    {"id": 5, "name": "Producer", "job": "Producer", "department": "Production"}
+                ]
+            }
+        });
+        let item = crate::tmdb::parse_tv_detail_json(&json.to_string()).unwrap();
+        let people = tmdb_result_to_metadata(item)
+            .relations
+            .unwrap()
+            .people_details
+            .unwrap();
+        assert_eq!(
+            people
+                .iter()
+                .map(|person| person.tmdb.unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(people[1].kind, Some(PersonType::Creator));
+        for json in [
+            serde_json::json!({"id": 42, "name": "Show"}),
+            serde_json::json!({"id": 42, "name": "Show", "created_by": null}),
+        ] {
+            let item = crate::tmdb::parse_tv_detail_json(&json.to_string()).unwrap();
+            assert!(tmdb_result_to_metadata(item)
+                .relations
+                .unwrap()
+                .people_details
+                .is_none());
+        }
+    }
+
 }
