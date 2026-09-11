@@ -194,11 +194,19 @@ fn map_person_type(value: String) -> Option<PersonType> {
     Some(kind)
 }
 
+const MAX_CAST_PEOPLE: usize = 10;
+
 fn build_people_details(cast: &[TmdbCastMember], crew: &[TmdbCrewMember]) -> Vec<Person> {
     let mut people = Vec::new();
     let mut seen_ids = std::collections::HashSet::<u64>::new();
 
-    for member in cast {
+    let mut ordered_cast: Vec<_> = cast.iter().collect();
+    // Stable sorting preserves provider order for ties and missing order values.
+    ordered_cast.sort_by_key(|member| (member.order.is_none(), member.order.unwrap_or_default()));
+    for member in ordered_cast {
+        if people.len() == MAX_CAST_PEOPLE {
+            break;
+        }
         if seen_ids.insert(member.id) {
             people.push(Person {
                 id: format!("tmdb:{}", member.id),
@@ -811,6 +819,112 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn movies_and_shows_limit_unique_cast_by_order_and_keep_selected_crew() {
+        for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
+            let mut cast: Vec<_> = (0..15)
+                .rev()
+                .map(|order| TmdbCastMember {
+                    id: order as u64 + 1,
+                    order: Some(order),
+                    ..Default::default()
+                })
+                .collect();
+            // Repeated credits for one actor do not consume another cast slot.
+            cast.push(TmdbCastMember {
+                id: 1,
+                order: Some(0),
+                ..Default::default()
+            });
+            cast.insert(
+                0,
+                TmdbCastMember {
+                    id: 100,
+                    order: None,
+                    ..Default::default()
+                },
+            );
+            let result = tmdb_result_to_metadata(TmdbResult {
+                media_type: Some(media_type),
+                cast,
+                crew: vec![
+                    TmdbCrewMember {
+                        id: 1,
+                        job: "Director".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 15,
+                        job: "Director".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 101,
+                        job: "Writer".into(),
+                        ..Default::default()
+                    },
+                    TmdbCrewMember {
+                        id: 102,
+                        job: "Camera Operator".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            });
+            let people = result.relations.unwrap().people_details.unwrap();
+            assert_eq!(
+                people
+                    .iter()
+                    .map(|person| person.tmdb.unwrap())
+                    .collect::<Vec<_>>(),
+                (1..=10).chain([15, 101]).collect::<Vec<_>>()
+            );
+            assert!(people[..10]
+                .iter()
+                .all(|person| person.kind == Some(PersonType::Actor)));
+            assert_eq!(people[10].kind, Some(PersonType::Director));
+            assert_eq!(people[11].kind, Some(PersonType::Writer));
+        }
+    }
+
+    #[test]
+    fn cast_order_ties_and_missing_values_keep_provider_order() {
+        let cast = [
+            (1, None),
+            (2, Some(2)),
+            (3, Some(2)),
+            (4, None),
+            (5, Some(u32::MAX)),
+        ]
+        .map(|(id, order)| TmdbCastMember {
+            id,
+            order,
+            ..Default::default()
+        });
+        let people = build_people_details(&cast, &[]);
+        assert_eq!(
+            people
+                .iter()
+                .map(|person| person.tmdb.unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3, 5, 1, 4]
+        );
+        let missing: Vec<_> = (1..=12)
+            .map(|id| TmdbCastMember {
+                id,
+                ..Default::default()
+            })
+            .collect();
+        assert_eq!(
+            build_people_details(&missing, &[])
+                .iter()
+                .map(|person| person.tmdb.unwrap())
+                .collect::<Vec<_>>(),
+            (1..=10).collect::<Vec<_>>()
+        );
+        assert!(build_people_details(&[], &[]).is_empty());
     }
 
 }

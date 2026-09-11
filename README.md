@@ -28,3 +28,19 @@ cargo test --test lookup_test test_lookup_person_type_uses_canonical_string
 The live lookup requires TMDB network access. The conversion test target includes
 only the pure modules; native `cargo test --lib` also links Extism host imports
 that are normally provided by the WASM runtime.
+
+
+## Cast selection during refresh
+
+Movie and show metadata include at most **10 unique cast members**, sorted by
+TMDB's cast `order` (lowest first). Missing order values come last; ties and
+missing values retain provider order. Duplicate credits do not consume extra
+slots. Filtering happens before the server fetches full person details.
+
+Selected directors, writers/screenplay writers, producers, and creators are
+included separately from the cast limit, so the total can exceed 10 people.
+A person present in both selected cast and crew is returned once. A person
+outside the cast cutoff can still be included for a selected crew job.
+
+This limits future imports. Existing people and relationships in a library
+are not removed by refresh.
