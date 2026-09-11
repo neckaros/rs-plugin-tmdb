@@ -442,3 +442,32 @@ fn test_lookup_empty_movie_name_returns_error() {
         "Expected empty query error, got: {message}"
     );
 }
+
+#[test]
+fn test_lookup_person_type_uses_canonical_string() {
+    let mut plugin = build_plugin();
+    let input = RsLookupWrapper {
+        query: RsLookupQuery::Person(RsLookupPerson {
+            name: None,
+            ids: Some(RsIds::from_tmdb(287)),
+            page_key: None,
+        }),
+        credential: None,
+        params: None,
+    };
+    let results = call_lookup(&mut plugin, &input);
+    let person = results
+        .results
+        .into_iter()
+        .find_map(|result| match result.metadata {
+            RsLookupMetadataResult::Person(person) => Some(person),
+            _ => None,
+        })
+        .expect("Expected full person metadata for TMDB 287");
+    assert_eq!(person.tmdb, Some(287));
+    assert_eq!(
+        person.kind,
+        Some(rs_plugin_common_interfaces::domain::person::PersonType::Actor)
+    );
+    assert_eq!(serde_json::to_value(person).unwrap()["type"], "Actor");
+}

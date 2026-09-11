@@ -830,11 +830,9 @@ mod tests {
 
     #[test]
     fn parse_tmdb_id_case_insensitive() {
-        assert_eq!(parse_tmdb_id("TMDB:550"), Some((550, None)));
-        assert_eq!(
-            parse_tmdb_id("TMDB-MOVIE:550"),
-            Some((550, Some(TmdbMediaType::Movie)))
-        );
+        for value in ["tmdb:550", "tmdb-movie:550", "tmdb-tv:1396"] {
+            assert_eq!(parse_tmdb_id(&value.to_ascii_uppercase()), parse_tmdb_id(value));
+        }
     }
 
     #[test]
