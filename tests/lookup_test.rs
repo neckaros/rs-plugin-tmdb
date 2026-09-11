@@ -524,3 +524,17 @@ fn test_lookup_people_selection_for_movies_and_shows() {
                 || person.kind.as_ref() == Some(&expected_crew)));
     }
 }
+
+
+#[test]
+fn test_infos_version_matches_package_release() {
+    let mut plugin = build_plugin();
+    let output = plugin
+        .call::<&str, &[u8]>("infos", "")
+        .expect("infos call failed");
+    let info: rs_plugin_common_interfaces::PluginInformation =
+        serde_json::from_slice(output).expect("Invalid plugin information");
+    // This plugin's 0.N.0 releases advertise N to the host.
+    let release_version: u16 = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
+    assert_eq!(info.version, release_version);
+}
