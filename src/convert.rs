@@ -21,6 +21,8 @@ use crate::tmdb::{
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
     let images = tmdb_result_to_images(&item);
     let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
+    let people_roles = build_people_roles(&people_details, &item.cast, &item.crew);
+    let people_characters = build_people_characters(&people_details, &item.cast);
     let tag_details = build_tag_details(&item.genres);
 
     let metadata = match item.media_type.as_ref() {
@@ -73,6 +75,8 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
             } else {
                 Some(images)
             },
+            people_roles: Some(people_roles),
+            people_characters: Some(people_characters),
             people_details: if people_details.is_empty() {
                 None
             } else {
@@ -192,6 +196,39 @@ fn map_person_type(value: String) -> Option<PersonType> {
         _ => PersonType::from(value),
     };
     Some(kind)
+}
+
+fn build_people_characters(
+    selected: &[Person], cast: &[TmdbCastMember],
+) -> std::collections::HashMap<String, Vec<String>> {
+    selected.iter().filter_map(|person| {
+        let mut names = Vec::new();
+        for character in cast.iter().filter(|credit| Some(credit.id) == person.tmdb)
+            .filter_map(|credit| credit.character.as_ref()) {
+            let name = character.trim();
+            if !name.is_empty() && !names.iter().any(|existing| existing == name) {
+                names.push(name.to_string());
+            }
+        }
+        if names.is_empty() { None } else { Some((person.id.clone(), names)) }
+    }).collect()
+}
+
+fn build_people_roles(
+    selected: &[Person], cast: &[TmdbCastMember], crew: &[TmdbCrewMember],
+) -> std::collections::HashMap<String, Vec<PersonType>> {
+    selected.iter().map(|person| {
+        let mut roles = Vec::new();
+        if cast.iter().any(|credit| Some(credit.id) == person.tmdb) {
+            roles.push(PersonType::Actor);
+        }
+        for credit in crew.iter().filter(|credit| Some(credit.id) == person.tmdb) {
+            if let Some(role) = map_person_type(credit.job.clone()) {
+                if !roles.contains(&role) { roles.push(role); }
+            }
+        }
+        (person.id.clone(), roles)
+    }).collect()
 }
 
 const MAX_CAST_PEOPLE: usize = 10;
@@ -422,6 +459,37 @@ fn map_serie_status(status: &Option<String>) -> Option<SerieStatus> {
 mod tests {
     use super::*;
     use crate::tmdb::{TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImages};
+
+    #[test]
+    fn character_names_are_contextual_and_deduplicated() {
+        let cast = vec![
+            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character A".into()), ..Default::default() },
+            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character B".into()), ..Default::default() },
+            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character A".into()), ..Default::default() },
+            TmdbCastMember { id: 2, name: "Other".into(), character: Some(" ".into()), ..Default::default() },
+        ];
+        let selected = build_people_details(&cast, &[], None);
+        let names = build_people_characters(&selected, &cast);
+        assert_eq!(names["tmdb:1"], vec!["Character A", "Character B"]);
+        assert!(!names.contains_key("tmdb:2"));
+    }
+
+    #[test]
+    fn selected_people_keep_multiple_credit_roles_without_importing_extra_crew() {
+        let cast = vec![TmdbCastMember { id: 1, name: "Person".into(), ..Default::default() }];
+        let crew = vec![
+            TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
+            TmdbCrewMember { id: 1, name: "Person".into(), job: "Writer".into(), ..Default::default() },
+            TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
+            TmdbCrewMember { id: 2, name: "Other".into(), job: "Producer".into(), ..Default::default() },
+        ];
+        let selected = build_people_details(&cast, &crew, Some(&TmdbMediaType::Movie));
+        assert_eq!(selected.len(), 1);
+        let roles = build_people_roles(&selected, &cast, &crew);
+        assert_eq!(roles["tmdb:1"], vec![PersonType::Actor, PersonType::Director, PersonType::Writer]);
+        assert!(!roles.contains_key("tmdb:2"));
+        assert_eq!(serde_json::to_value(roles).unwrap()["tmdb:1"], serde_json::json!(["Actor","Director","Writer"]));
+    }
 
     #[test]
     fn maps_movie_result_to_metadata() {
