@@ -46,3 +46,15 @@ outside the cast cutoff can still qualify as a director or creator.
 
 This limits future imports. Existing people and relationships in a library
 are not removed by refresh.
+
+### Relationship credits
+
+The plugin emits `relations.peopleRoles`, keyed by person summary ID, using
+canonical PersonType string arrays. These describe this credit, independently
+of the person profile type.
+Selected people retain all mapped crew roles and Actor when present in cast.
+Selection remains top ten unique cast plus movie directors/show creators.
+`peopleCharacters` carries nonblank, deduplicated character names from cast credits.
+
+This PR pins common interfaces 0.39.0 to its source revision while
+the shared-interface release is pending.
