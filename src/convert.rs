@@ -20,7 +20,7 @@ use crate::tmdb::{
 
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
     let images = tmdb_result_to_images(&item);
-    let people_details = build_people_details(&item.cast, &item.crew);
+    let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
     let tag_details = build_tag_details(&item.genres);
 
     let metadata = match item.media_type.as_ref() {
@@ -197,6 +197,7 @@ fn map_person_type(value: String) -> Option<PersonType> {
 fn build_people_details(
     cast: &[TmdbCastMember],
     crew: &[TmdbCrewMember],
+    media_type: Option<&TmdbMediaType>,
 ) -> Vec<PersonWithRoles> {
     let mut people = Vec::new();
     let mut seen_ids = std::collections::HashSet::<u64>::new();
@@ -217,7 +218,15 @@ fn build_people_details(
         }
     }
 
+    let selected_job = if matches!(media_type, Some(TmdbMediaType::Tv)) {
+        "creator"
+    } else {
+        "director"
+    };
     for member in crew {
+        if !member.job.trim().eq_ignore_ascii_case(selected_job) {
+            continue;
+        }
         if seen_ids.insert(member.id) {
             people.push(Person {
                 id: format!("tmdb:{}", member.id),
@@ -489,13 +498,13 @@ mod tests {
             TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character A".into()), ..Default::default() },
             TmdbCastMember { id: 2, name: "Other".into(), character: Some(" ".into()), ..Default::default() },
         ];
-        let selected = build_people_details(&cast, &[]);
+        let selected = build_people_details(&cast, &[], None);
         assert_eq!(selected[0].characters, Some(vec!["Character A".into(), "Character B".into()]));
         assert_eq!(selected[1].characters, None);
     }
 
     #[test]
-    fn all_people_keep_multiple_credit_roles() {
+    fn selected_people_keep_multiple_credit_roles_without_importing_extra_crew() {
         let cast = vec![TmdbCastMember { id: 1, name: "Person".into(), ..Default::default() }];
         let crew = vec![
             TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
@@ -503,9 +512,8 @@ mod tests {
             TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
             TmdbCrewMember { id: 2, name: "Other".into(), job: "Producer".into(), ..Default::default() },
         ];
-        let selected = build_people_details(&cast, &crew);
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[1].roles, Some(vec![PersonType::Producer]));
+        let selected = build_people_details(&cast, &crew, Some(&TmdbMediaType::Movie));
+        assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].roles, Some(vec![PersonType::Actor, PersonType::Director, PersonType::Writer]));
         assert_eq!(serde_json::to_value(&selected[0]).unwrap()["roles"], serde_json::json!(["Actor","Director","Writer"]));
     }
@@ -821,6 +829,7 @@ mod tests {
                 department: "Directing".to_string(),
                 ..Default::default()
             }],
+            None,
         );
         assert_eq!(people.len(), 1);
         assert_eq!(people[0].person.id, "tmdb:100");
@@ -890,7 +899,7 @@ mod tests {
             ..Default::default()
         })
         .collect::<Vec<_>>();
-        let people = build_people_details(&cast, &crew);
+        let people = build_people_details(&cast, &crew, None);
         assert_eq!(
             people
                 .iter()
@@ -898,11 +907,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 PersonType::Actor,
-                PersonType::Writer,
-                PersonType::Writer,
-                PersonType::Producer,
-                PersonType::Creator,
-                PersonType::Custom("Camera Operator".into()),
                 PersonType::Director
             ]
         );
@@ -916,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn movies_and_shows_keep_all_unique_cast_and_crew() {
+    fn movies_and_shows_keep_all_cast_and_only_selected_crew() {
         for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
             let mut cast: Vec<_> = (0..15)
                 .rev()
@@ -926,7 +930,7 @@ mod tests {
                     ..Default::default()
                 })
                 .collect();
-            // Repeated credits for one actor remain a single person.
+            // Repeated credits for one actor still produce only one person.
             cast.push(TmdbCastMember {
                 id: 1,
                 order: Some(0),
@@ -941,9 +945,14 @@ mod tests {
                 },
             );
             let result = tmdb_result_to_metadata(TmdbResult {
-                media_type: Some(media_type),
+                media_type: Some(media_type.clone()),
                 cast,
                 crew: vec![
+                    TmdbCrewMember {
+                        id: 104,
+                        job: if media_type == TmdbMediaType::Tv { "Creator" } else { "Director" }.into(),
+                        ..Default::default()
+                    },
                     TmdbCrewMember {
                         id: 15, job: "Creator".into(), ..Default::default()
                     },
@@ -979,14 +988,16 @@ mod tests {
                     .iter()
                     .map(|credit| credit.person.tmdb.unwrap())
                     .collect::<Vec<_>>(),
-                (1..=15).chain([100, 103, 101, 102]).collect::<Vec<_>>()
+                (1..=15).chain([100, 104]).collect::<Vec<_>>()
             );
             assert!(people[..16]
                 .iter()
                 .all(|credit| credit.person.kind == Some(PersonType::Actor)));
-            assert_eq!(people[16].person.kind, Some(PersonType::Producer));
-            assert_eq!(people[17].person.kind, Some(PersonType::Writer));
-            assert_eq!(people[18].person.kind, Some(PersonType::Custom("Camera Operator".into())));
+            assert_eq!(people[16].person.kind, Some(if media_type == TmdbMediaType::Tv {
+                PersonType::Creator
+            } else {
+                PersonType::Director
+            }));
         }
     }
 
@@ -1004,7 +1015,7 @@ mod tests {
             order,
             ..Default::default()
         });
-        let people = build_people_details(&cast, &[]);
+        let people = build_people_details(&cast, &[], None);
         assert_eq!(
             people
                 .iter()
@@ -1019,17 +1030,17 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            build_people_details(&missing, &[])
+            build_people_details(&missing, &[], None)
                 .iter()
                 .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
             (1..=12).collect::<Vec<_>>()
         );
-        assert!(build_people_details(&[], &[]).is_empty());
+        assert!(build_people_details(&[], &[], None).is_empty());
     }
 
     #[test]
-    fn show_creators_are_included_alongside_all_other_crew() {
+    fn show_creators_come_from_created_by_and_other_crew_are_excluded() {
         let json = serde_json::json!({
             "id": 42, "name": "Show",
             "created_by": [{"id": 1, "name": "Cast and creator"}, {"id": 2, "name": "Creator"}, {"id": 2, "name": "Repeated creator"}],
@@ -1053,9 +1064,9 @@ mod tests {
                 .iter()
                 .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
-            vec![1, 3, 4, 5, 2]
+            vec![1, 2]
         );
-        assert_eq!(people[4].person.kind, Some(PersonType::Creator));
+        assert_eq!(people[1].person.kind, Some(PersonType::Creator));
         for json in [
             serde_json::json!({"id": 42, "name": "Show"}),
             serde_json::json!({"id": 42, "name": "Show", "created_by": null}),

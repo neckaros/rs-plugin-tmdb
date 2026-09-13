@@ -32,25 +32,27 @@ that are normally provided by the WASM runtime.
 
 ## Cast selection during refresh
 
-Movie and show metadata include every cast and crew member returned by TMDB,
-without a cast limit or crew-job filter. Cast members are sorted by TMDB's
-`order` (lowest first); missing values come last, and ties preserve provider order.
-Crew follows in provider order. Show creators from `created_by` are included too.
-Each person appears once, combining all roles and character names and retaining
-the lowest known cast order. People listed in both cast and crew remain actors
-in their profile summary, with all crew roles on the credit object.
+Movie and show metadata include **all unique cast members**, sorted by TMDB's
+cast `order` (lowest first). Missing order values come last; ties preserve provider
+order. Repeated cast credits are merged into one person without a numerical limit.
+
+Movies additionally include directors only. Shows additionally include creators
+from TMDB's `created_by` field only. Other crew members are not imported unless
+they are also cast members or qualify as a movie director or show creator.
+People present in both cast and eligible crew appear once, with all their roles
+and character names preserved.
 
 This limits future imports. Existing people and relationships in a library
 are not removed by refresh.
 
 ### Relationship credits
 
-The plugin returns one object per person in `relations.peopleDetails`.
+The plugin returns one object per selected person in `relations.peopleDetails`.
 Each object contains the person summary plus optional `roles`, `characters`, and
 integer `rank` fields. There are no parallel credit maps in plugin output.
 
 Roles use canonical PersonType strings and include all mapped roles for that
-person. Character names are nonblank and deduplicated. Rank preserves
+selected person. Character names are nonblank and deduplicated. Rank preserves
 TMDB's zero-based cast `order`; duplicate credits use the lowest known order.
 Unknown ranks and character names are omitted. Cast limits and crew selection
 are unchanged.

@@ -586,7 +586,7 @@ fn tv_detail_to_result(detail: TmdbTvDetail) -> TmdbResult {
     let credits = detail.credits.unwrap_or_default();
     let mut crew = credits.crew.unwrap_or_default();
     // TMDB lists show creators separately from credits. Normalize them into
-    // explicit Creator credits alongside the rest of the crew.
+    // explicit Creator credits before applying the show's people selection.
     crew.extend(
         detail
             .created_by
