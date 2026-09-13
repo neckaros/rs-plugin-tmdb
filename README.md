@@ -49,12 +49,15 @@ are not removed by refresh.
 
 ### Relationship credits
 
-The plugin emits `relations.peopleRoles`, keyed by person summary ID, using
-canonical PersonType string arrays. These describe this credit, independently
-of the person profile type.
-Selected people retain all mapped crew roles and Actor when present in cast.
-Selection remains top ten unique cast plus movie directors/show creators.
-`peopleCharacters` carries nonblank, deduplicated character names from cast credits.
+The plugin returns one object per selected person in `relations.peopleDetails`.
+Each object contains the person summary plus optional `roles`, `characters`, and
+integer `rank` fields. There are no parallel credit maps in plugin output.
 
-This PR pins common interfaces 0.39.0 to its source revision while
-the shared-interface release is pending.
+Roles use canonical PersonType strings and include all mapped roles for that
+selected person. Character names are nonblank and deduplicated. Rank preserves
+TMDB's zero-based cast `order`; duplicate credits use the lowest known order.
+Unknown ranks and character names are omitted. Cast limits and crew selection
+are unchanged.
+
+This uses common interfaces 0.40.0. Update the server before updating the plugin
+so inline relationship fields are persisted, then refresh existing title credits.

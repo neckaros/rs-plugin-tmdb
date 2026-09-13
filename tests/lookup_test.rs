@@ -512,16 +512,16 @@ fn test_lookup_people_selection_for_movies_and_shows() {
             .expect("Expected people");
         assert!(people
             .iter()
-            .any(|person| person.kind.as_ref() == Some(&expected_crew)));
+            .any(|credit| credit.person.kind.as_ref() == Some(&expected_crew)));
         let actors = people
             .iter()
-            .filter(|person| person.kind == Some(PersonType::Actor))
+            .filter(|credit| credit.person.kind == Some(PersonType::Actor))
             .count();
         assert!((1..=10).contains(&actors));
         assert!(people
             .iter()
-            .all(|person| person.kind == Some(PersonType::Actor)
-                || person.kind.as_ref() == Some(&expected_crew)));
+            .all(|credit| credit.person.kind == Some(PersonType::Actor)
+                || credit.person.kind.as_ref() == Some(&expected_crew)));
     }
 }
 
