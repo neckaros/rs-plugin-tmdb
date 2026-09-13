@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 extism-pdk = "1.4.1"
-rs-plugin-common-interfaces = { git = "https://github.com/neckaros/rs-plugin-common-interfaces", rev = "67fb91223860a7e2086d9d2e309584a0e168eaa8", version = "0.40.0" }
+rs-plugin-common-interfaces = { git = "https://github.com/neckaros/rs-plugin-common-interfaces", rev = "0ee402a1b702ff47e9bd11dcd248fd03c375f770", version = "0.40.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"

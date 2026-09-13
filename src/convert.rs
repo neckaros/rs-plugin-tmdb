@@ -3,7 +3,7 @@ use rs_plugin_common_interfaces::{
         episode::Episode,
         external_images::{ExternalImage, ImageType},
         movie::{Movie, MovieStatus},
-        person::{Person, PersonType},
+        person::{Person, PersonType, PersonWithRoles},
         serie::{Serie, SerieStatus, SerieType},
         tag::Tag,
         Relations,
@@ -21,9 +21,6 @@ use crate::tmdb::{
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
     let images = tmdb_result_to_images(&item);
     let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
-    let people_roles = build_people_roles(&people_details, &item.cast, &item.crew);
-    let people_characters = build_people_characters(&people_details, &item.cast);
-    let people_ranks = build_people_ranks(&people_details, &item.cast);
     let tag_details = build_tag_details(&item.genres);
 
     let metadata = match item.media_type.as_ref() {
@@ -76,9 +73,6 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
             } else {
                 Some(images)
             },
-            people_roles: Some(people_roles),
-            people_characters: Some(people_characters),
-            people_ranks: (!people_ranks.is_empty()).then_some(people_ranks),
             people_details: if people_details.is_empty() {
                 None
             } else {
@@ -200,56 +194,13 @@ fn map_person_type(value: String) -> Option<PersonType> {
     Some(kind)
 }
 
-fn build_people_characters(
-    selected: &[Person], cast: &[TmdbCastMember],
-) -> std::collections::HashMap<String, Vec<String>> {
-    selected.iter().filter_map(|person| {
-        let mut names = Vec::new();
-        for character in cast.iter().filter(|credit| Some(credit.id) == person.tmdb)
-            .filter_map(|credit| credit.character.as_ref()) {
-            let name = character.trim();
-            if !name.is_empty() && !names.iter().any(|existing| existing == name) {
-                names.push(name.to_string());
-            }
-        }
-        if names.is_empty() { None } else { Some((person.id.clone(), names)) }
-    }).collect()
-}
-
-fn build_people_roles(
-    selected: &[Person], cast: &[TmdbCastMember], crew: &[TmdbCrewMember],
-) -> std::collections::HashMap<String, Vec<PersonType>> {
-    selected.iter().map(|person| {
-        let mut roles = Vec::new();
-        if cast.iter().any(|credit| Some(credit.id) == person.tmdb) {
-            roles.push(PersonType::Actor);
-        }
-        for credit in crew.iter().filter(|credit| Some(credit.id) == person.tmdb) {
-            if let Some(role) = map_person_type(credit.job.clone()) {
-                if !roles.contains(&role) { roles.push(role); }
-            }
-        }
-        (person.id.clone(), roles)
-    }).collect()
-}
-
 const MAX_CAST_PEOPLE: usize = 10;
-
-fn build_people_ranks(
-    selected: &[Person], cast: &[TmdbCastMember],
-) -> std::collections::HashMap<String, u32> {
-    selected.iter().filter_map(|person| {
-        let rank = cast.iter().filter(|credit| Some(credit.id) == person.tmdb)
-            .filter_map(|credit| credit.order).min()?;
-        Some((person.id.clone(), rank))
-    }).collect()
-}
 
 fn build_people_details(
     cast: &[TmdbCastMember],
     crew: &[TmdbCrewMember],
     media_type: Option<&TmdbMediaType>,
-) -> Vec<Person> {
+) -> Vec<PersonWithRoles> {
     let mut people = Vec::new();
     let mut seen_ids = std::collections::HashSet::<u64>::new();
 
@@ -294,6 +245,44 @@ fn build_people_details(
     }
 
     people
+        .into_iter()
+        .map(|person| {
+            let mut roles = Vec::new();
+            let mut characters = Vec::new();
+            let mut rank: Option<u32> = None;
+            for credit in cast.iter().filter(|credit| Some(credit.id) == person.tmdb) {
+                if roles.is_empty() {
+                    roles.push(PersonType::Actor);
+                }
+                if let Some(order) = credit.order {
+                    rank = Some(rank.map_or(order, |current| current.min(order)));
+                }
+                if let Some(name) = credit
+                    .character
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                {
+                    if !characters.iter().any(|existing| existing == name) {
+                        characters.push(name.to_string());
+                    }
+                }
+            }
+            for credit in crew.iter().filter(|credit| Some(credit.id) == person.tmdb) {
+                if let Some(role) = map_person_type(credit.job.clone()) {
+                    if !roles.contains(&role) {
+                        roles.push(role);
+                    }
+                }
+            }
+            PersonWithRoles {
+                person,
+                roles: Some(roles),
+                characters: (!characters.is_empty()).then_some(characters),
+                rank,
+            }
+        })
+        .collect()
 }
 
 fn build_tag_details(genres: &[TmdbGenre]) -> Vec<Tag> {
@@ -485,21 +474,24 @@ mod tests {
                 ..Default::default()
             });
             let relations = result.relations.unwrap();
-            let ranks = relations.people_ranks.as_ref().unwrap();
-            assert_eq!(ranks.len(), MAX_CAST_PEOPLE);
-            assert_eq!(ranks["tmdb:0"], 0);
-            assert_eq!(ranks["tmdb:1"], 2);
-            assert!(!ranks.contains_key("tmdb:14"));
-            assert!(!ranks.contains_key("tmdb:99"));
+            let credits = relations.people_details.as_ref().unwrap();
+            assert_eq!(credits.iter().filter(|credit| credit.rank.is_some()).count(), MAX_CAST_PEOPLE);
+            assert_eq!(credits[0].rank, Some(0));
+            assert_eq!(credits[1].rank, Some(2));
+            assert!(!credits.iter().any(|credit| credit.person.id == "tmdb:14"));
+            assert!(credits.iter().filter(|credit| credit.person.id == "tmdb:99").all(|credit| credit.rank.is_none()));
             let wire = serde_json::to_value(relations).unwrap();
-            assert_eq!(wire["peopleRanks"]["tmdb:0"], 0);
+            assert_eq!(wire["peopleDetails"][0]["rank"], 0);
+            for field in ["peopleRanks", "peopleRoles", "peopleCharacters"] {
+                assert!(wire.get(field).is_none());
+            }
         }
         let result = tmdb_result_to_metadata(TmdbResult {
             cast: vec![TmdbCastMember { id: 1, order: None, ..Default::default() }],
             ..Default::default()
         });
-        assert!(result.relations.as_ref().unwrap().people_ranks.is_none());
-        assert!(serde_json::to_value(result).unwrap()["relations"].get("peopleRanks").is_none());
+        assert!(result.relations.as_ref().unwrap().people_details.as_ref().unwrap()[0].rank.is_none());
+        assert!(serde_json::to_value(result).unwrap()["relations"]["peopleDetails"][0].get("rank").is_none());
     }
 
     #[test]
@@ -511,9 +503,8 @@ mod tests {
             TmdbCastMember { id: 2, name: "Other".into(), character: Some(" ".into()), ..Default::default() },
         ];
         let selected = build_people_details(&cast, &[], None);
-        let names = build_people_characters(&selected, &cast);
-        assert_eq!(names["tmdb:1"], vec!["Character A", "Character B"]);
-        assert!(!names.contains_key("tmdb:2"));
+        assert_eq!(selected[0].characters, Some(vec!["Character A".into(), "Character B".into()]));
+        assert_eq!(selected[1].characters, None);
     }
 
     #[test]
@@ -527,10 +518,8 @@ mod tests {
         ];
         let selected = build_people_details(&cast, &crew, Some(&TmdbMediaType::Movie));
         assert_eq!(selected.len(), 1);
-        let roles = build_people_roles(&selected, &cast, &crew);
-        assert_eq!(roles["tmdb:1"], vec![PersonType::Actor, PersonType::Director, PersonType::Writer]);
-        assert!(!roles.contains_key("tmdb:2"));
-        assert_eq!(serde_json::to_value(roles).unwrap()["tmdb:1"], serde_json::json!(["Actor","Director","Writer"]));
+        assert_eq!(selected[0].roles, Some(vec![PersonType::Actor, PersonType::Director, PersonType::Writer]));
+        assert_eq!(serde_json::to_value(&selected[0]).unwrap()["roles"], serde_json::json!(["Actor","Director","Writer"]));
     }
 
     #[test]
@@ -636,12 +625,12 @@ mod tests {
             .and_then(|r| r.people_details.as_ref())
             .expect("expected people");
         assert_eq!(people.len(), 3);
-        assert_eq!(people[0].id, "tmdb:819");
-        assert_eq!(people[0].name, "Edward Norton");
-        assert_eq!(people[0].kind, Some(PersonType::Actor));
-        assert_eq!(people[2].id, "tmdb:7467");
-        assert_eq!(people[2].name, "David Fincher");
-        assert_eq!(people[2].kind, Some(PersonType::Director));
+        assert_eq!(people[0].person.id, "tmdb:819");
+        assert_eq!(people[0].person.name, "Edward Norton");
+        assert_eq!(people[0].person.kind, Some(PersonType::Actor));
+        assert_eq!(people[2].person.id, "tmdb:7467");
+        assert_eq!(people[2].person.name, "David Fincher");
+        assert_eq!(people[2].person.kind, Some(PersonType::Director));
     }
 
     #[test]
@@ -847,7 +836,7 @@ mod tests {
             None,
         );
         assert_eq!(people.len(), 1);
-        assert_eq!(people[0].id, "tmdb:100");
+        assert_eq!(people[0].person.id, "tmdb:100");
     }
 
     #[test]
@@ -918,7 +907,7 @@ mod tests {
         assert_eq!(
             people
                 .iter()
-                .map(|person| person.kind.clone().unwrap())
+                .map(|credit| credit.person.kind.clone().unwrap())
                 .collect::<Vec<_>>(),
             vec![
                 PersonType::Actor,
@@ -928,7 +917,7 @@ mod tests {
         assert_eq!(
             people
                 .iter()
-                .filter(|person| person.tmdb == Some(1))
+                .filter(|credit| credit.person.tmdb == Some(1))
                 .count(),
             1
         );
@@ -1001,14 +990,14 @@ mod tests {
             assert_eq!(
                 people
                     .iter()
-                    .map(|person| person.tmdb.unwrap())
+                    .map(|credit| credit.person.tmdb.unwrap())
                     .collect::<Vec<_>>(),
                 (1..=10).chain([15]).collect::<Vec<_>>()
             );
             assert!(people[..10]
                 .iter()
-                .all(|person| person.kind == Some(PersonType::Actor)));
-            assert_eq!(people[10].kind, Some(expected_crew_type));
+                .all(|credit| credit.person.kind == Some(PersonType::Actor)));
+            assert_eq!(people[10].person.kind, Some(expected_crew_type));
         }
     }
 
@@ -1030,7 +1019,7 @@ mod tests {
         assert_eq!(
             people
                 .iter()
-                .map(|person| person.tmdb.unwrap())
+                .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
             vec![2, 3, 5, 1, 4]
         );
@@ -1043,7 +1032,7 @@ mod tests {
         assert_eq!(
             build_people_details(&missing, &[], None)
                 .iter()
-                .map(|person| person.tmdb.unwrap())
+                .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
             (1..=10).collect::<Vec<_>>()
         );
@@ -1073,11 +1062,11 @@ mod tests {
         assert_eq!(
             people
                 .iter()
-                .map(|person| person.tmdb.unwrap())
+                .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
-        assert_eq!(people[1].kind, Some(PersonType::Creator));
+        assert_eq!(people[1].person.kind, Some(PersonType::Creator));
         for json in [
             serde_json::json!({"id": 42, "name": "Show"}),
             serde_json::json!({"id": 42, "name": "Show", "created_by": null}),
