@@ -194,8 +194,6 @@ fn map_person_type(value: String) -> Option<PersonType> {
     Some(kind)
 }
 
-const MAX_CAST_PEOPLE: usize = 10;
-
 fn build_people_details(
     cast: &[TmdbCastMember],
     crew: &[TmdbCrewMember],
@@ -208,9 +206,6 @@ fn build_people_details(
     // Stable sorting preserves provider order for ties and missing order values.
     ordered_cast.sort_by_key(|member| (member.order.is_none(), member.order.unwrap_or_default()));
     for member in ordered_cast {
-        if people.len() == MAX_CAST_PEOPLE {
-            break;
-        }
         if seen_ids.insert(member.id) {
             people.push(Person {
                 id: format!("tmdb:{}", member.id),
@@ -463,7 +458,7 @@ mod tests {
     use crate::tmdb::{TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImages};
 
     #[test]
-    fn credit_ranks_keep_provider_values_for_selected_cast_only() {
+    fn credit_ranks_keep_provider_values_for_all_cast() {
         for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
             let mut cast: Vec<_> = (0..15).map(|id| TmdbCastMember {
                 id, name: format!("Actor {id}"), order: Some(id as u32 * 2), ..Default::default()
@@ -476,10 +471,10 @@ mod tests {
             });
             let relations = result.relations.unwrap();
             let credits = relations.people_details.as_ref().unwrap();
-            assert_eq!(credits.iter().filter(|credit| credit.rank.is_some()).count(), MAX_CAST_PEOPLE);
+            assert_eq!(credits.iter().filter(|credit| credit.rank.is_some()).count(), 15);
             assert_eq!(credits[0].rank, Some(0));
             assert_eq!(credits[1].rank, Some(2));
-            assert!(!credits.iter().any(|credit| credit.person.id == "tmdb:14"));
+            assert_eq!(credits.iter().find(|credit| credit.person.id == "tmdb:14").unwrap().rank, Some(28));
             assert!(credits.iter().filter(|credit| credit.person.id == "tmdb:99").all(|credit| credit.rank.is_none()));
             let wire = serde_json::to_value(relations).unwrap();
             assert_eq!(wire["peopleDetails"][0]["rank"], 0);
@@ -925,13 +920,8 @@ mod tests {
     }
 
     #[test]
-    fn movies_and_shows_limit_unique_cast_by_order_and_keep_selected_crew() {
+    fn movies_and_shows_keep_all_cast_and_only_selected_crew() {
         for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
-            let expected_crew_type = if media_type == TmdbMediaType::Tv {
-                PersonType::Creator
-            } else {
-                PersonType::Director
-            };
             let mut cast: Vec<_> = (0..15)
                 .rev()
                 .map(|order| TmdbCastMember {
@@ -940,7 +930,7 @@ mod tests {
                     ..Default::default()
                 })
                 .collect();
-            // Repeated credits for one actor do not consume another cast slot.
+            // Repeated credits for one actor still produce only one person.
             cast.push(TmdbCastMember {
                 id: 1,
                 order: Some(0),
@@ -955,9 +945,14 @@ mod tests {
                 },
             );
             let result = tmdb_result_to_metadata(TmdbResult {
-                media_type: Some(media_type),
+                media_type: Some(media_type.clone()),
                 cast,
                 crew: vec![
+                    TmdbCrewMember {
+                        id: 104,
+                        job: if media_type == TmdbMediaType::Tv { "Creator" } else { "Director" }.into(),
+                        ..Default::default()
+                    },
                     TmdbCrewMember {
                         id: 15, job: "Creator".into(), ..Default::default()
                     },
@@ -993,12 +988,16 @@ mod tests {
                     .iter()
                     .map(|credit| credit.person.tmdb.unwrap())
                     .collect::<Vec<_>>(),
-                (1..=10).chain([15]).collect::<Vec<_>>()
+                (1..=15).chain([100, 104]).collect::<Vec<_>>()
             );
-            assert!(people[..10]
+            assert!(people[..16]
                 .iter()
                 .all(|credit| credit.person.kind == Some(PersonType::Actor)));
-            assert_eq!(people[10].person.kind, Some(expected_crew_type));
+            assert_eq!(people[16].person.kind, Some(if media_type == TmdbMediaType::Tv {
+                PersonType::Creator
+            } else {
+                PersonType::Director
+            }));
         }
     }
 
@@ -1035,7 +1034,7 @@ mod tests {
                 .iter()
                 .map(|credit| credit.person.tmdb.unwrap())
                 .collect::<Vec<_>>(),
-            (1..=10).collect::<Vec<_>>()
+            (1..=12).collect::<Vec<_>>()
         );
         assert!(build_people_details(&[], &[], None).is_empty());
     }
