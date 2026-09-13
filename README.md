@@ -54,8 +54,8 @@ integer `rank` fields. There are no parallel credit maps in plugin output.
 Roles use canonical PersonType strings and include all mapped roles for that
 selected person. Character names are nonblank and deduplicated. Rank preserves
 TMDB's zero-based cast `order`; duplicate credits use the lowest known order.
-Unknown ranks and character names are omitted. Cast limits and crew selection
-are unchanged.
+Unknown ranks and character names are omitted. Crew selection is unchanged;
+the cast has no numerical limit.
 
 This uses common interfaces 0.40.0. Update the server before updating the plugin
 so inline relationship fields are persisted, then refresh existing title credits.
