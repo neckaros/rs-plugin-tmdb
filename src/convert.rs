@@ -280,6 +280,7 @@ fn build_people_details(
                 roles: Some(roles),
                 characters: (!characters.is_empty()).then_some(characters),
                 rank,
+                conf: None,
             }
         })
         .collect()
