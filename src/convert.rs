@@ -23,6 +23,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
     let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
     let people_roles = build_people_roles(&people_details, &item.cast, &item.crew);
     let people_characters = build_people_characters(&people_details, &item.cast);
+    let people_ranks = build_people_ranks(&people_details, &item.cast);
     let tag_details = build_tag_details(&item.genres);
 
     let metadata = match item.media_type.as_ref() {
@@ -77,6 +78,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
             },
             people_roles: Some(people_roles),
             people_characters: Some(people_characters),
+            people_ranks: (!people_ranks.is_empty()).then_some(people_ranks),
             people_details: if people_details.is_empty() {
                 None
             } else {
@@ -232,6 +234,16 @@ fn build_people_roles(
 }
 
 const MAX_CAST_PEOPLE: usize = 10;
+
+fn build_people_ranks(
+    selected: &[Person], cast: &[TmdbCastMember],
+) -> std::collections::HashMap<String, u32> {
+    selected.iter().filter_map(|person| {
+        let rank = cast.iter().filter(|credit| Some(credit.id) == person.tmdb)
+            .filter_map(|credit| credit.order).min()?;
+        Some((person.id.clone(), rank))
+    }).collect()
+}
 
 fn build_people_details(
     cast: &[TmdbCastMember],
@@ -459,6 +471,36 @@ fn map_serie_status(status: &Option<String>) -> Option<SerieStatus> {
 mod tests {
     use super::*;
     use crate::tmdb::{TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImages};
+
+    #[test]
+    fn credit_ranks_keep_provider_values_for_selected_cast_only() {
+        for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
+            let mut cast: Vec<_> = (0..15).map(|id| TmdbCastMember {
+                id, name: format!("Actor {id}"), order: Some(id as u32 * 2), ..Default::default()
+            }).collect();
+            cast.push(TmdbCastMember { id: 0, order: Some(20), ..Default::default() });
+            let result = tmdb_result_to_metadata(TmdbResult {
+                media_type: Some(media_type), cast,
+                crew: vec![TmdbCrewMember { id: 99, job: "Director".into(), ..Default::default() }],
+                ..Default::default()
+            });
+            let relations = result.relations.unwrap();
+            let ranks = relations.people_ranks.as_ref().unwrap();
+            assert_eq!(ranks.len(), MAX_CAST_PEOPLE);
+            assert_eq!(ranks["tmdb:0"], 0);
+            assert_eq!(ranks["tmdb:1"], 2);
+            assert!(!ranks.contains_key("tmdb:14"));
+            assert!(!ranks.contains_key("tmdb:99"));
+            let wire = serde_json::to_value(relations).unwrap();
+            assert_eq!(wire["peopleRanks"]["tmdb:0"], 0);
+        }
+        let result = tmdb_result_to_metadata(TmdbResult {
+            cast: vec![TmdbCastMember { id: 1, order: None, ..Default::default() }],
+            ..Default::default()
+        });
+        assert!(result.relations.as_ref().unwrap().people_ranks.is_none());
+        assert!(serde_json::to_value(result).unwrap()["relations"].get("peopleRanks").is_none());
+    }
 
     #[test]
     fn character_names_are_contextual_and_deduplicated() {

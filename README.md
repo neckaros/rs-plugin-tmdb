@@ -58,3 +58,10 @@ Selection remains top ten unique cast plus movie directors/show creators.
 
 This PR pins common interfaces 0.39.0 to its source revision while
 the shared-interface release is pending.
+
+### Credit ranks
+
+`relations.peopleRanks` preserves TMDB's optional, zero-based cast `order` for
+selected actors. Lower ranks come first. Duplicate credits use the lowest known
+order; unranked actors and crew have no rank. The map is omitted when no selected
+actor has a known order. Existing cast limits and crew selection are unchanged.
