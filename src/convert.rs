@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use rs_plugin_common_interfaces::{
     domain::{
         episode::Episode,
@@ -11,17 +12,25 @@ use rs_plugin_common_interfaces::{
     lookup::{RsLookupMetadataResult, RsLookupMetadataResultWrapper},
     RsRequest, RsRequestStatus,
 };
-use chrono::NaiveDate;
 
 use crate::tmdb::{
-    build_image_url, TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImage, TmdbMediaType,
-    TmdbEpisodeResult, TmdbPersonResult, TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
+    build_image_url, TmdbCastMember, TmdbCrewMember, TmdbEpisodeResult, TmdbGenre, TmdbImage,
+    TmdbMediaType, TmdbPersonResult, TmdbResult, TMDB_IMAGE_SIZE_ORIGINAL,
 };
 
 pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrapper {
     let images = tmdb_result_to_images(&item);
     let people_details = build_people_details(&item.cast, &item.crew, item.media_type.as_ref());
     let tag_details = build_tag_details(&item.genres);
+    let series_details = item.collection.as_ref().map(|collection| {
+        vec![Serie {
+            id: format!("tmdb-collection:{}", collection.id),
+            name: collection.name.clone(),
+            tmdb: Some(collection.id),
+            kind: Some(SerieType::Movie),
+            ..Default::default()
+        }]
+    });
 
     let metadata = match item.media_type.as_ref() {
         Some(TmdbMediaType::Tv) => {
@@ -83,6 +92,7 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
             } else {
                 Some(tag_details)
             },
+            series_details,
             ..Default::default()
         }),
         ..Default::default()
@@ -181,7 +191,7 @@ pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage
 }
 
 /// Map TMDB departments/jobs here, keeping the shared contract provider-independent.
-fn map_person_type(value: String) -> Option<PersonType> {
+pub(crate) fn map_person_type(value: String) -> Option<PersonType> {
     let kind = match value.trim().to_ascii_lowercase().as_str() {
         "" => return None,
         "acting" | "actor" => PersonType::Actor,
@@ -455,27 +465,81 @@ fn map_serie_status(status: &Option<String>) -> Option<SerieStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tmdb::{TmdbCastMember, TmdbCrewMember, TmdbGenre, TmdbImages};
+    use crate::tmdb::{TmdbCastMember, TmdbCollectionRef, TmdbCrewMember, TmdbGenre, TmdbImages};
+
+    #[test]
+    fn movie_collection_is_returned_as_a_series_relation() {
+        let result = tmdb_result_to_metadata(TmdbResult {
+            media_type: Some(TmdbMediaType::Movie),
+            id: 11,
+            title: "Star Wars".into(),
+            collection: Some(TmdbCollectionRef {
+                id: 10,
+                name: "Star Wars Collection".into(),
+            }),
+            ..Default::default()
+        });
+        let series = result
+            .relations
+            .unwrap()
+            .series_details
+            .expect("Expected a collection relation");
+
+        assert_eq!(series.len(), 1);
+        assert_eq!(series[0].id, "tmdb-collection:10");
+        assert_eq!(series[0].tmdb, Some(10));
+        assert_eq!(series[0].kind, Some(SerieType::Movie));
+    }
 
     #[test]
     fn credit_ranks_keep_provider_values_for_all_cast() {
         for media_type in [TmdbMediaType::Movie, TmdbMediaType::Tv] {
-            let mut cast: Vec<_> = (0..15).map(|id| TmdbCastMember {
-                id, name: format!("Actor {id}"), order: Some(id as u32 * 2), ..Default::default()
-            }).collect();
-            cast.push(TmdbCastMember { id: 0, order: Some(20), ..Default::default() });
+            let mut cast: Vec<_> = (0..15)
+                .map(|id| TmdbCastMember {
+                    id,
+                    name: format!("Actor {id}"),
+                    order: Some(id as u32 * 2),
+                    ..Default::default()
+                })
+                .collect();
+            cast.push(TmdbCastMember {
+                id: 0,
+                order: Some(20),
+                ..Default::default()
+            });
             let result = tmdb_result_to_metadata(TmdbResult {
-                media_type: Some(media_type), cast,
-                crew: vec![TmdbCrewMember { id: 99, job: "Director".into(), ..Default::default() }],
+                media_type: Some(media_type),
+                cast,
+                crew: vec![TmdbCrewMember {
+                    id: 99,
+                    job: "Director".into(),
+                    ..Default::default()
+                }],
                 ..Default::default()
             });
             let relations = result.relations.unwrap();
             let credits = relations.people_details.as_ref().unwrap();
-            assert_eq!(credits.iter().filter(|credit| credit.rank.is_some()).count(), 15);
+            assert_eq!(
+                credits
+                    .iter()
+                    .filter(|credit| credit.rank.is_some())
+                    .count(),
+                15
+            );
             assert_eq!(credits[0].rank, Some(0));
             assert_eq!(credits[1].rank, Some(2));
-            assert_eq!(credits.iter().find(|credit| credit.person.id == "tmdb:14").unwrap().rank, Some(28));
-            assert!(credits.iter().filter(|credit| credit.person.id == "tmdb:99").all(|credit| credit.rank.is_none()));
+            assert_eq!(
+                credits
+                    .iter()
+                    .find(|credit| credit.person.id == "tmdb:14")
+                    .unwrap()
+                    .rank,
+                Some(28)
+            );
+            assert!(credits
+                .iter()
+                .filter(|credit| credit.person.id == "tmdb:99")
+                .all(|credit| credit.rank.is_none()));
             let wire = serde_json::to_value(relations).unwrap();
             assert_eq!(wire["peopleDetails"][0]["rank"], 0);
             for field in ["peopleRanks", "peopleRoles", "peopleCharacters"] {
@@ -483,39 +547,112 @@ mod tests {
             }
         }
         let result = tmdb_result_to_metadata(TmdbResult {
-            cast: vec![TmdbCastMember { id: 1, order: None, ..Default::default() }],
+            cast: vec![TmdbCastMember {
+                id: 1,
+                order: None,
+                ..Default::default()
+            }],
             ..Default::default()
         });
-        assert!(result.relations.as_ref().unwrap().people_details.as_ref().unwrap()[0].rank.is_none());
-        assert!(serde_json::to_value(result).unwrap()["relations"]["peopleDetails"][0].get("rank").is_none());
+        assert!(result
+            .relations
+            .as_ref()
+            .unwrap()
+            .people_details
+            .as_ref()
+            .unwrap()[0]
+            .rank
+            .is_none());
+        assert!(
+            serde_json::to_value(result).unwrap()["relations"]["peopleDetails"][0]
+                .get("rank")
+                .is_none()
+        );
     }
 
     #[test]
     fn character_names_are_contextual_and_deduplicated() {
         let cast = vec![
-            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character A".into()), ..Default::default() },
-            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character B".into()), ..Default::default() },
-            TmdbCastMember { id: 1, name: "Person".into(), character: Some("Character A".into()), ..Default::default() },
-            TmdbCastMember { id: 2, name: "Other".into(), character: Some(" ".into()), ..Default::default() },
+            TmdbCastMember {
+                id: 1,
+                name: "Person".into(),
+                character: Some("Character A".into()),
+                ..Default::default()
+            },
+            TmdbCastMember {
+                id: 1,
+                name: "Person".into(),
+                character: Some("Character B".into()),
+                ..Default::default()
+            },
+            TmdbCastMember {
+                id: 1,
+                name: "Person".into(),
+                character: Some("Character A".into()),
+                ..Default::default()
+            },
+            TmdbCastMember {
+                id: 2,
+                name: "Other".into(),
+                character: Some(" ".into()),
+                ..Default::default()
+            },
         ];
         let selected = build_people_details(&cast, &[], None);
-        assert_eq!(selected[0].characters, Some(vec!["Character A".into(), "Character B".into()]));
+        assert_eq!(
+            selected[0].characters,
+            Some(vec!["Character A".into(), "Character B".into()])
+        );
         assert_eq!(selected[1].characters, None);
     }
 
     #[test]
     fn selected_people_keep_multiple_credit_roles_without_importing_extra_crew() {
-        let cast = vec![TmdbCastMember { id: 1, name: "Person".into(), ..Default::default() }];
+        let cast = vec![TmdbCastMember {
+            id: 1,
+            name: "Person".into(),
+            ..Default::default()
+        }];
         let crew = vec![
-            TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
-            TmdbCrewMember { id: 1, name: "Person".into(), job: "Writer".into(), ..Default::default() },
-            TmdbCrewMember { id: 1, name: "Person".into(), job: "Director".into(), ..Default::default() },
-            TmdbCrewMember { id: 2, name: "Other".into(), job: "Producer".into(), ..Default::default() },
+            TmdbCrewMember {
+                id: 1,
+                name: "Person".into(),
+                job: "Director".into(),
+                ..Default::default()
+            },
+            TmdbCrewMember {
+                id: 1,
+                name: "Person".into(),
+                job: "Writer".into(),
+                ..Default::default()
+            },
+            TmdbCrewMember {
+                id: 1,
+                name: "Person".into(),
+                job: "Director".into(),
+                ..Default::default()
+            },
+            TmdbCrewMember {
+                id: 2,
+                name: "Other".into(),
+                job: "Producer".into(),
+                ..Default::default()
+            },
         ];
         let selected = build_people_details(&cast, &crew, Some(&TmdbMediaType::Movie));
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].roles, Some(vec![PersonType::Actor, PersonType::Director, PersonType::Writer]));
-        assert_eq!(serde_json::to_value(&selected[0]).unwrap()["roles"], serde_json::json!(["Actor","Director","Writer"]));
+        assert_eq!(
+            selected[0].roles,
+            Some(vec![
+                PersonType::Actor,
+                PersonType::Director,
+                PersonType::Writer
+            ])
+        );
+        assert_eq!(
+            serde_json::to_value(&selected[0]).unwrap()["roles"],
+            serde_json::json!(["Actor", "Director", "Writer"])
+        );
     }
 
     #[test]
@@ -733,14 +870,8 @@ mod tests {
 
     #[test]
     fn parse_date_to_timestamp_returns_milliseconds() {
-        assert_eq!(
-            parse_date_to_timestamp("2021-09-23"),
-            Some(1632355200000)
-        );
-        assert_eq!(
-            parse_date_to_timestamp("2024-09-20"),
-            Some(1726790400000)
-        );
+        assert_eq!(parse_date_to_timestamp("2021-09-23"), Some(1632355200000));
+        assert_eq!(parse_date_to_timestamp("2024-09-20"), Some(1726790400000));
     }
 
     #[test]
@@ -877,6 +1008,26 @@ mod tests {
     }
 
     #[test]
+    fn crew_job_mapping_does_not_promote_related_department_jobs() {
+        assert_eq!(
+            map_person_type("Assistant Director".into()),
+            Some(PersonType::Custom("Assistant Director".into()))
+        );
+        assert_eq!(
+            map_person_type("Casting".into()),
+            Some(PersonType::Custom("Casting".into()))
+        );
+        assert_eq!(
+            map_person_type("Executive Producer".into()),
+            Some(PersonType::Custom("Executive Producer".into()))
+        );
+        assert_eq!(
+            map_person_type("Screenplay".into()),
+            Some(PersonType::Writer)
+        );
+    }
+
+    #[test]
     fn credit_summaries_use_canonical_types_and_keep_cast_deduplication() {
         let cast = [TmdbCastMember {
             id: 1,
@@ -905,10 +1056,7 @@ mod tests {
                 .iter()
                 .map(|credit| credit.person.kind.clone().unwrap())
                 .collect::<Vec<_>>(),
-            vec![
-                PersonType::Actor,
-                PersonType::Director
-            ]
+            vec![PersonType::Actor, PersonType::Director]
         );
         assert_eq!(
             people
@@ -950,14 +1098,23 @@ mod tests {
                 crew: vec![
                     TmdbCrewMember {
                         id: 104,
-                        job: if media_type == TmdbMediaType::Tv { "Creator" } else { "Director" }.into(),
+                        job: if media_type == TmdbMediaType::Tv {
+                            "Creator"
+                        } else {
+                            "Director"
+                        }
+                        .into(),
                         ..Default::default()
                     },
                     TmdbCrewMember {
-                        id: 15, job: "Creator".into(), ..Default::default()
+                        id: 15,
+                        job: "Creator".into(),
+                        ..Default::default()
                     },
                     TmdbCrewMember {
-                        id: 103, job: "Producer".into(), ..Default::default()
+                        id: 103,
+                        job: "Producer".into(),
+                        ..Default::default()
                     },
                     TmdbCrewMember {
                         id: 1,
@@ -993,11 +1150,14 @@ mod tests {
             assert!(people[..16]
                 .iter()
                 .all(|credit| credit.person.kind == Some(PersonType::Actor)));
-            assert_eq!(people[16].person.kind, Some(if media_type == TmdbMediaType::Tv {
-                PersonType::Creator
-            } else {
-                PersonType::Director
-            }));
+            assert_eq!(
+                people[16].person.kind,
+                Some(if media_type == TmdbMediaType::Tv {
+                    PersonType::Creator
+                } else {
+                    PersonType::Director
+                })
+            );
         }
     }
 
@@ -1079,5 +1239,4 @@ mod tests {
                 .is_none());
         }
     }
-
 }
