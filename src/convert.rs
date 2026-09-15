@@ -191,7 +191,7 @@ pub fn tmdb_image_to_external(img: &TmdbImage, kind: ImageType) -> ExternalImage
 }
 
 /// Map TMDB departments/jobs here, keeping the shared contract provider-independent.
-fn map_person_type(value: String) -> Option<PersonType> {
+pub(crate) fn map_person_type(value: String) -> Option<PersonType> {
     let kind = match value.trim().to_ascii_lowercase().as_str() {
         "" => return None,
         "acting" | "actor" => PersonType::Actor,
@@ -1005,6 +1005,26 @@ mod tests {
             assert_eq!(person.kind, None);
             assert!(serde_json::to_value(person).unwrap().get("type").is_none());
         }
+    }
+
+    #[test]
+    fn crew_job_mapping_does_not_promote_related_department_jobs() {
+        assert_eq!(
+            map_person_type("Assistant Director".into()),
+            Some(PersonType::Custom("Assistant Director".into()))
+        );
+        assert_eq!(
+            map_person_type("Casting".into()),
+            Some(PersonType::Custom("Casting".into()))
+        );
+        assert_eq!(
+            map_person_type("Executive Producer".into()),
+            Some(PersonType::Custom("Executive Producer".into()))
+        );
+        assert_eq!(
+            map_person_type("Screenplay".into()),
+            Some(PersonType::Writer)
+        );
     }
 
     #[test]

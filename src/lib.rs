@@ -15,8 +15,8 @@ mod convert;
 mod tmdb;
 
 use convert::{
-    tmdb_episode_stills_to_images, tmdb_episode_to_metadata, tmdb_person_to_images,
-    tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata,
+    map_person_type, tmdb_episode_stills_to_images, tmdb_episode_to_metadata,
+    tmdb_person_to_images, tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata,
 };
 use tmdb::{
     build_collection_detail_url, build_collection_search_url, build_episode_images_url,
@@ -407,22 +407,8 @@ fn filter_id(ids: Option<&RsIds>, provider_key: &str) -> Option<u64> {
     ids.and_then(|ids| ids.get_u64(provider_key).or_else(|| ids.tmdb()))
 }
 
-fn crew_role_matches(job: &str, department: &str, role: &PersonType) -> bool {
-    let job = normalized(job);
-    let department = normalized(department);
-    match role {
-        PersonType::Director => job == "director" || department == "directing",
-        PersonType::Writer => {
-            matches!(job.as_str(), "writer" | "screenplay" | "story") || department == "writing"
-        }
-        PersonType::Producer => job.contains("producer") || department == "production",
-        PersonType::Creator => job.contains("creator"),
-        PersonType::Custom(value) => {
-            let value = normalized(value);
-            !value.is_empty() && (job == value || department == value)
-        }
-        _ => false,
-    }
+fn crew_role_matches(job: &str, role: &PersonType) -> bool {
+    map_person_type(job.to_string()).as_ref() == Some(role)
 }
 
 fn person_filter_matches(result: &TmdbResult, filter: &RsLookupPersonFilter) -> bool {
@@ -455,8 +441,7 @@ fn person_filter_matches(result: &TmdbResult, filter: &RsLookupPersonFilter) -> 
             .iter()
             .any(|member| identity_matches(member.id, &member.name)),
         Some(role) => result.crew.iter().any(|member| {
-            identity_matches(member.id, &member.name)
-                && crew_role_matches(&member.job, &member.department, role)
+            identity_matches(member.id, &member.name) && crew_role_matches(&member.job, role)
         }),
     }
 }
@@ -531,12 +516,22 @@ fn credit_matches_role(credit: &TmdbCreditItem, role: &PersonType, cast: bool) -
     if role == &PersonType::Actor {
         return cast;
     }
-    !cast
-        && crew_role_matches(
-            credit.job.as_deref().unwrap_or_default(),
-            credit.department.as_deref().unwrap_or_default(),
-            role,
-        )
+    !cast && crew_role_matches(credit.job.as_deref().unwrap_or_default(), role)
+}
+
+fn credit_matches_seed_role(
+    credit: &TmdbCreditItem,
+    role: &PersonType,
+    cast: bool,
+    media_type: &TmdbMediaType,
+) -> bool {
+    // TMDB models show creators in `created_by`, not as a canonical Creator
+    // job in person TV credits. Seed from all of the person's TV credits and
+    // let the show detail's normalized `created_by` relation validate it.
+    if role == &PersonType::Creator && media_type == &TmdbMediaType::Tv {
+        return true;
+    }
+    credit_matches_role(credit, role, cast)
 }
 
 fn paginate_results(
@@ -585,7 +580,7 @@ fn person_seed_results(
         if filter
             .role
             .as_ref()
-            .is_some_and(|role| !credit_matches_role(&credit, role, cast))
+            .is_some_and(|role| !credit_matches_seed_role(&credit, role, cast, media_type))
         {
             continue;
         }

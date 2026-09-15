@@ -598,6 +598,42 @@ fn test_lookup_movies_by_director_filter() {
 }
 
 #[test]
+fn test_lookup_shows_by_creator_filter() {
+    use rs_plugin_common_interfaces::domain::person::PersonType;
+
+    let mut plugin = build_plugin();
+    let results = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Serie(RsLookupSerie {
+                people: Some(vec![RsLookupPersonFilter {
+                    ids: Some(provider_ids("tmdb-person", 66633)),
+                    role: Some(PersonType::Creator),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+
+    assert!(!results.results.is_empty(), "Expected Vince Gilligan shows");
+    assert!(results.results.iter().all(|result| {
+        result
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.people_details.as_ref())
+            .is_some_and(|people| {
+                people.iter().any(|credit| {
+                    credit.person.tmdb == Some(66633)
+                        && credit.person.kind == Some(PersonType::Creator)
+                })
+            })
+    }));
+}
+
+#[test]
 fn test_lookup_relationship_filters_accept_optional_roles_and_external_ids() {
     let mut plugin = build_plugin();
 
