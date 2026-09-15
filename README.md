@@ -59,3 +59,21 @@ the cast has no numerical limit.
 
 This uses common interfaces 0.40.0. Update the server before updating the plugin
 so inline relationship fields are persisted, then refresh existing title credits.
+
+## Relationship search
+
+Version 0.17.0 uses `rs-plugin-common-interfaces` 0.41.0 and supports relationship
+filters on movie and show lookup queries:
+
+- `people` accepts a TMDB person ID (`tmdb-person`) or a name. An omitted `role`
+  matches either cast or crew; a supplied role restricts the matching credit.
+- `tags` accepts a TMDB genre ID (`tmdb-genre`) or an exact genre name. Returned
+  genre tags expose the same `tmdb-genre:<id>` external ID.
+- `series` on movie queries accepts a TMDB collection ID (`tmdb-collection`) or
+  an exact collection name. Movie results expose that collection in
+  `relations.seriesDetails`.
+
+TMDB has no equivalent parent-franchise filter for TV shows, so a `series`
+constraint on a show query returns no matches. Relationship filters can be used
+alone to discover titles, or alongside a title/provider ID to constrain its
+results.
