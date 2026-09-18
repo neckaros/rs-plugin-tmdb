@@ -291,7 +291,7 @@ fn build_tag_details(genres: &[TmdbGenre]) -> Vec<Tag> {
             id: format!("tmdb-genre:{}", genre.id),
             name: genre.name.clone(),
             parent: None,
-            kind: None,
+            kind: Some("genre".to_string()),
             alt: None,
             thumb: None,
             params: None,
