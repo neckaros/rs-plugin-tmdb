@@ -32,29 +32,30 @@ that are normally provided by the WASM runtime.
 
 ## Cast selection during refresh
 
-Movie and show metadata include at most **10 unique cast members**, sorted by
-TMDB's cast `order` (lowest first). Missing order values come last; ties and
-missing values retain provider order. Duplicate credits do not consume extra
-slots. Filtering happens before the server fetches full person details.
+Movie and show metadata include **all unique cast members**, sorted by TMDB's
+cast `order` (lowest first). Missing order values come last; ties preserve provider
+order. Repeated cast credits are merged into one person without a numerical limit.
 
 Movies additionally include directors only. Shows additionally include creators
-from TMDB's `created_by` field only. These are separate from the cast limit, so
-the total can exceed 10 people. Writers and producers are not imported unless
-they also qualify as selected cast, movie directors, or show creators.
-A person present in both selected cast and crew is returned once. A person
-outside the cast cutoff can still qualify as a director or creator.
+from TMDB's `created_by` field only. Other crew members are not imported unless
+they are also cast members or qualify as a movie director or show creator.
+People present in both cast and eligible crew appear once, with all their roles
+and character names preserved.
 
 This limits future imports. Existing people and relationships in a library
 are not removed by refresh.
 
 ### Relationship credits
 
-The plugin emits `relations.peopleRoles`, keyed by person summary ID, using
-canonical PersonType string arrays. These describe this credit, independently
-of the person profile type.
-Selected people retain all mapped crew roles and Actor when present in cast.
-Selection remains top ten unique cast plus movie directors/show creators.
-`peopleCharacters` carries nonblank, deduplicated character names from cast credits.
+The plugin returns one object per selected person in `relations.peopleDetails`.
+Each object contains the person summary plus optional `roles`, `characters`, and
+integer `rank` fields. There are no parallel credit maps in plugin output.
 
-This PR pins common interfaces 0.39.0 to its source revision while
-the shared-interface release is pending.
+Roles use canonical PersonType strings and include all mapped roles for that
+selected person. Character names are nonblank and deduplicated. Rank preserves
+TMDB's zero-based cast `order`; duplicate credits use the lowest known order.
+Unknown ranks and character names are omitted. Crew selection is unchanged;
+the cast has no numerical limit.
+
+This uses common interfaces 0.40.0. Update the server before updating the plugin
+so inline relationship fields are persisted, then refresh existing title credits.

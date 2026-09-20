@@ -473,7 +473,7 @@ fn test_lookup_person_type_uses_canonical_string() {
 }
 
 #[test]
-fn test_lookup_people_selection_for_movies_and_shows() {
+fn test_lookup_unlimited_cast_keeps_crew_selection_for_movies_and_shows() {
     use rs_plugin_common_interfaces::domain::person::PersonType;
     let cases = [
         (
@@ -482,6 +482,7 @@ fn test_lookup_people_selection_for_movies_and_shows() {
                 ..Default::default()
             }),
             PersonType::Director,
+            11, // Fight Club has more than ten actors; reject the previous cap.
         ),
         (
             RsLookupQuery::Serie(RsLookupSerie {
@@ -489,10 +490,11 @@ fn test_lookup_people_selection_for_movies_and_shows() {
                 ..Default::default()
             }),
             PersonType::Creator,
+            1, // Show main-cast lists may contain fewer than eleven actors.
         ),
     ];
     let mut plugin = build_plugin();
-    for (query, expected_crew) in cases {
+    for (query, expected_crew, minimum_actors) in cases {
         let results = call_lookup(
             &mut plugin,
             &RsLookupWrapper {
@@ -512,16 +514,18 @@ fn test_lookup_people_selection_for_movies_and_shows() {
             .expect("Expected people");
         assert!(people
             .iter()
-            .any(|person| person.kind.as_ref() == Some(&expected_crew)));
+            .any(|credit| credit.person.kind.as_ref() == Some(&expected_crew)));
         let actors = people
             .iter()
-            .filter(|person| person.kind == Some(PersonType::Actor))
+            .filter(|credit| credit.person.kind == Some(PersonType::Actor))
             .count();
-        assert!((1..=10).contains(&actors));
+        assert!(actors >= minimum_actors, "Expected at least {minimum_actors} actors, got {actors}");
+        let unique_ids: std::collections::HashSet<_> = people.iter().map(|credit| &credit.person.id).collect();
+        assert_eq!(unique_ids.len(), people.len(), "Credits must not duplicate people");
         assert!(people
             .iter()
-            .all(|person| person.kind == Some(PersonType::Actor)
-                || person.kind.as_ref() == Some(&expected_crew)));
+            .all(|credit| credit.person.kind == Some(PersonType::Actor)
+                || credit.person.kind.as_ref() == Some(&expected_crew)));
     }
 }
 
