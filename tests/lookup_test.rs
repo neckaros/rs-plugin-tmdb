@@ -3,7 +3,8 @@ use rs_plugin_common_interfaces::{
     domain::{external_images::ExternalImage, rs_ids::RsIds},
     lookup::{
         RsLookupEpisode, RsLookupMetadataResult, RsLookupMetadataResults, RsLookupMovie,
-        RsLookupPerson, RsLookupQuery, RsLookupSerie, RsLookupWrapper,
+        RsLookupPerson, RsLookupPersonFilter, RsLookupQuery, RsLookupSerie, RsLookupSerieFilter,
+        RsLookupTagFilter, RsLookupWrapper,
     },
 };
 
@@ -33,6 +34,12 @@ fn call_lookup_images(plugin: &mut Plugin, input: &RsLookupWrapper) -> Vec<Exter
     serde_json::from_slice(output).expect("Failed to parse images output")
 }
 
+fn provider_ids(key: &str, value: u64) -> RsIds {
+    let mut ids = RsIds::default();
+    ids.set(key, value);
+    ids
+}
+
 #[test]
 fn test_lookup_no_credential_uses_default_key() {
     let mut plugin = build_plugin();
@@ -42,6 +49,7 @@ fn test_lookup_no_credential_uses_default_key() {
             name: Some("Fight Club".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -63,6 +71,7 @@ fn test_lookup_movie_search() {
             name: Some("Fight Club".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -101,16 +110,14 @@ fn test_lookup_movie_direct_id() {
             name: Some("tmdb:550".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
     };
 
     let results = call_lookup(&mut plugin, &input);
-    assert!(
-        !results.results.is_empty(),
-        "Expected result for tmdb:550"
-    );
+    assert!(!results.results.is_empty(), "Expected result for tmdb:550");
 
     let first = &results.results[0];
     let movie = match &first.metadata {
@@ -120,7 +127,10 @@ fn test_lookup_movie_direct_id() {
 
     assert_eq!(movie.tmdb, Some(550), "Expected tmdb ID 550");
     assert!(movie.imdb.is_some(), "Expected IMDB ID for detail lookup");
-    assert!(movie.duration.is_some(), "Expected runtime for detail lookup");
+    assert!(
+        movie.duration.is_some(),
+        "Expected runtime for detail lookup"
+    );
     assert!(movie.airdate.is_some(), "Expected theatrical release date");
     assert!(
         movie.digitalairdate.is_some(),
@@ -161,6 +171,7 @@ fn test_lookup_tv_search() {
             name: Some("Breaking Bad".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -199,16 +210,14 @@ fn test_lookup_tv_direct_id() {
             name: Some("tmdb:1396".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
     };
 
     let results = call_lookup(&mut plugin, &input);
-    assert!(
-        !results.results.is_empty(),
-        "Expected result for tmdb:1396"
-    );
+    assert!(!results.results.is_empty(), "Expected result for tmdb:1396");
 
     let first = &results.results[0];
     let serie = match &first.metadata {
@@ -230,6 +239,7 @@ fn test_lookup_movie_pagination() {
             name: Some("love".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -247,6 +257,7 @@ fn test_lookup_movie_pagination() {
             name: Some("love".to_string()),
             ids: None,
             page_key: page1.next_page_key.clone(),
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -283,6 +294,7 @@ fn test_lookup_images() {
             name: Some("tmdb:550".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -318,7 +330,10 @@ fn test_lookup_person_tmdb_5719226() {
         Ok(output) => {
             let results: RsLookupMetadataResults =
                 serde_json::from_slice(output).expect("Failed to parse output");
-            println!("Got {} results for person tmdb:5719226", results.results.len());
+            println!(
+                "Got {} results for person tmdb:5719226",
+                results.results.len()
+            );
             for r in &results.results {
                 match &r.metadata {
                     RsLookupMetadataResult::Person(p) => {
@@ -373,14 +388,19 @@ fn test_lookup_episode_images() {
             "Expected all episode images to be Stills"
         );
         assert!(
-            img.url.url.starts_with("https://image.tmdb.org/t/p/original/"),
+            img.url
+                .url
+                .starts_with("https://image.tmdb.org/t/p/original/"),
             "Expected TMDB image URL"
         );
     }
 
     println!("Got {} still images for Breaking Bad S01E01", images.len());
     for img in images.iter().take(3) {
-        println!("  {:?}: {} (status: {:?})", img.kind, img.url.url, img.url.status);
+        println!(
+            "  {:?}: {} (status: {:?})",
+            img.kind, img.url.url, img.url.status
+        );
     }
 }
 
@@ -414,7 +434,10 @@ fn test_lookup_episode_metadata_by_tmdb_show_id() {
 
     assert_eq!(episode.season, 1);
     assert!(episode.number >= 1);
-    assert_eq!(first.match_type, Some(rs_plugin_common_interfaces::lookup::RsLookupMatchType::ExactId));
+    assert_eq!(
+        first.match_type,
+        Some(rs_plugin_common_interfaces::lookup::RsLookupMatchType::ExactId)
+    );
 }
 
 #[test]
@@ -426,6 +449,7 @@ fn test_lookup_empty_movie_name_returns_error() {
             name: Some(String::new()),
             ids: None,
             page_key: None,
+            ..Default::default()
         }),
         credential: None,
         params: None,
@@ -519,9 +543,17 @@ fn test_lookup_unlimited_cast_keeps_crew_selection_for_movies_and_shows() {
             .iter()
             .filter(|credit| credit.person.kind == Some(PersonType::Actor))
             .count();
-        assert!(actors >= minimum_actors, "Expected at least {minimum_actors} actors, got {actors}");
-        let unique_ids: std::collections::HashSet<_> = people.iter().map(|credit| &credit.person.id).collect();
-        assert_eq!(unique_ids.len(), people.len(), "Credits must not duplicate people");
+        assert!(
+            actors >= minimum_actors,
+            "Expected at least {minimum_actors} actors, got {actors}"
+        );
+        let unique_ids: std::collections::HashSet<_> =
+            people.iter().map(|credit| &credit.person.id).collect();
+        assert_eq!(
+            unique_ids.len(),
+            people.len(),
+            "Credits must not duplicate people"
+        );
         assert!(people
             .iter()
             .all(|credit| credit.person.kind == Some(PersonType::Actor)
@@ -529,6 +561,184 @@ fn test_lookup_unlimited_cast_keeps_crew_selection_for_movies_and_shows() {
     }
 }
 
+#[test]
+fn test_lookup_movies_by_director_filter() {
+    use rs_plugin_common_interfaces::domain::person::PersonType;
+
+    let mut plugin = build_plugin();
+    let results = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Movie(RsLookupMovie {
+                people: Some(vec![RsLookupPersonFilter {
+                    name: Some("David Fincher".into()),
+                    role: Some(PersonType::Director),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+
+    assert!(!results.results.is_empty(), "Expected David Fincher movies");
+    assert!(results.results.iter().all(|result| {
+        result
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.people_details.as_ref())
+            .is_some_and(|people| {
+                people.iter().any(|credit| {
+                    credit.person.tmdb == Some(7467)
+                        && credit.person.kind == Some(PersonType::Director)
+                })
+            })
+    }));
+}
+
+#[test]
+fn test_lookup_shows_by_creator_filter() {
+    use rs_plugin_common_interfaces::domain::person::PersonType;
+
+    let mut plugin = build_plugin();
+    let results = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Serie(RsLookupSerie {
+                people: Some(vec![RsLookupPersonFilter {
+                    ids: Some(provider_ids("tmdb-person", 66633)),
+                    role: Some(PersonType::Creator),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+
+    assert!(!results.results.is_empty(), "Expected Vince Gilligan shows");
+    assert!(results.results.iter().all(|result| {
+        result
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.people_details.as_ref())
+            .is_some_and(|people| {
+                people.iter().any(|credit| {
+                    credit.person.tmdb == Some(66633)
+                        && credit.person.kind == Some(PersonType::Creator)
+                })
+            })
+    }));
+}
+
+#[test]
+fn test_lookup_relationship_filters_accept_optional_roles_and_external_ids() {
+    let mut plugin = build_plugin();
+
+    let broad_person_results = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Serie(RsLookupSerie {
+                ids: Some(RsIds::from_tmdb(1396)),
+                people: Some(vec![RsLookupPersonFilter {
+                    ids: Some(provider_ids("tmdb-person", 17419)),
+                    role: None,
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+    assert_eq!(broad_person_results.results.len(), 1);
+
+    let collection_and_tag_results = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Movie(RsLookupMovie {
+                ids: Some(RsIds::from_tmdb(11)),
+                series: Some(vec![RsLookupSerieFilter {
+                    ids: Some(provider_ids("tmdb-collection", 10)),
+                    ..Default::default()
+                }]),
+                tags: Some(vec![RsLookupTagFilter {
+                    ids: Some(provider_ids("tmdb-genre", 12)),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+    let relations = collection_and_tag_results
+        .results
+        .first()
+        .and_then(|result| result.relations.as_ref())
+        .expect("Expected Star Wars collection and genre relations");
+    assert!(relations
+        .series_details
+        .as_ref()
+        .is_some_and(|series| series.iter().any(|serie| serie.tmdb == Some(10))));
+    assert!(relations
+        .tags_details
+        .as_ref()
+        .is_some_and(|tags| tags.iter().any(|tag| tag.id == "tmdb-genre:12")));
+}
+
+#[test]
+fn test_lookup_movies_by_tag_and_collection_filters() {
+    let mut plugin = build_plugin();
+
+    let tagged = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Movie(RsLookupMovie {
+                tags: Some(vec![RsLookupTagFilter {
+                    ids: Some(provider_ids("tmdb-genre", 99)),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+    assert!(!tagged.results.is_empty(), "Expected documentary movies");
+    assert!(tagged.results.iter().all(|result| {
+        result
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.tags_details.as_ref())
+            .is_some_and(|tags| tags.iter().any(|tag| tag.id == "tmdb-genre:99"))
+    }));
+
+    let collection = call_lookup(
+        &mut plugin,
+        &RsLookupWrapper {
+            query: RsLookupQuery::Movie(RsLookupMovie {
+                series: Some(vec![RsLookupSerieFilter {
+                    ids: Some(provider_ids("tmdb-collection", 10)),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            credential: None,
+            params: None,
+        },
+    );
+    assert!(!collection.results.is_empty(), "Expected Star Wars movies");
+    assert!(collection.results.iter().all(|result| {
+        result
+            .relations
+            .as_ref()
+            .and_then(|relations| relations.series_details.as_ref())
+            .is_some_and(|series| series.iter().any(|serie| serie.tmdb == Some(10)))
+    }));
+}
 
 #[test]
 fn test_infos_version_matches_package_release() {

@@ -39,10 +39,17 @@ pub struct TmdbResult {
     pub cast: Vec<TmdbCastMember>,
     pub crew: Vec<TmdbCrewMember>,
     pub images: TmdbImages,
+    pub collection: Option<TmdbCollectionRef>,
 
     // TV-specific
     pub number_of_seasons: Option<u32>,
     pub number_of_episodes: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct TmdbCollectionRef {
+    pub id: u64,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
@@ -140,6 +147,42 @@ pub struct TmdbMovieDetail {
     pub credits: Option<TmdbCredits>,
     pub images: Option<TmdbImagesResponse>,
     pub release_dates: Option<TmdbReleaseDatesResponse>,
+    pub belongs_to_collection: Option<TmdbCollectionRef>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbCollectionSearchResponse {
+    pub results: Vec<TmdbCollectionRef>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbCollectionDetail {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub parts: Vec<TmdbSearchItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbGenreListResponse {
+    #[serde(default)]
+    pub genres: Vec<TmdbGenre>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbPersonCreditsResponse {
+    #[serde(default)]
+    pub cast: Vec<TmdbCreditItem>,
+    #[serde(default)]
+    pub crew: Vec<TmdbCreditItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TmdbCreditItem {
+    #[serde(flatten)]
+    pub item: TmdbSearchItem,
+    pub job: Option<String>,
+    pub department: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -299,6 +342,65 @@ pub fn build_tv_search_url(api_key: &str, query: &str, page: Option<u32>) -> Opt
     ))
 }
 
+pub fn build_movie_discover_url(api_key: &str, genre_ids: &[u64], page: Option<u32>) -> String {
+    let page_num = page.unwrap_or(1);
+    let genres = genre_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "https://api.themoviedb.org/3/discover/movie?api_key={api_key}&with_genres={genres}&page={page_num}"
+    )
+}
+
+pub fn build_tv_discover_url(api_key: &str, genre_ids: &[u64], page: Option<u32>) -> String {
+    let page_num = page.unwrap_or(1);
+    let genres = genre_ids
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "https://api.themoviedb.org/3/discover/tv?api_key={api_key}&with_genres={genres}&page={page_num}"
+    )
+}
+
+pub fn build_genre_list_url(api_key: &str, media_type: &TmdbMediaType) -> String {
+    let kind = match media_type {
+        TmdbMediaType::Movie => "movie",
+        TmdbMediaType::Tv => "tv",
+    };
+    format!("https://api.themoviedb.org/3/genre/{kind}/list?api_key={api_key}")
+}
+
+pub fn build_collection_search_url(api_key: &str, query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "https://api.themoviedb.org/3/search/collection?api_key={api_key}&query={}",
+        encode_query_component(trimmed)
+    ))
+}
+
+pub fn build_collection_detail_url(api_key: &str, collection_id: u64) -> String {
+    format!("https://api.themoviedb.org/3/collection/{collection_id}?api_key={api_key}")
+}
+
+pub fn build_person_credits_url(
+    api_key: &str,
+    person_id: u64,
+    media_type: &TmdbMediaType,
+) -> String {
+    let kind = match media_type {
+        TmdbMediaType::Movie => "movie_credits",
+        TmdbMediaType::Tv => "tv_credits",
+    };
+    format!("https://api.themoviedb.org/3/person/{person_id}/{kind}?api_key={api_key}")
+}
+
 pub fn build_movie_detail_url(api_key: &str, movie_id: u64) -> String {
     format!(
         "https://api.themoviedb.org/3/movie/{movie_id}?api_key={api_key}&append_to_response=credits,images,release_dates"
@@ -434,6 +536,40 @@ pub fn parse_tv_search_json(json: &str) -> Option<(Vec<TmdbResult>, Option<Strin
     Some((results, next_page_key))
 }
 
+pub fn parse_genre_list_json(json: &str) -> Option<Vec<TmdbGenre>> {
+    serde_json::from_str::<TmdbGenreListResponse>(json)
+        .ok()
+        .map(|response| response.genres)
+}
+
+pub fn parse_collection_search_json(json: &str) -> Option<Vec<TmdbCollectionRef>> {
+    serde_json::from_str::<TmdbCollectionSearchResponse>(json)
+        .ok()
+        .map(|response| response.results)
+}
+
+pub fn parse_collection_detail_json(json: &str) -> Option<(TmdbCollectionRef, Vec<TmdbResult>)> {
+    let response: TmdbCollectionDetail = serde_json::from_str(json).ok()?;
+    let collection = TmdbCollectionRef {
+        id: response.id,
+        name: response.name,
+    };
+    let results = response
+        .parts
+        .into_iter()
+        .map(|item| search_item_to_result(item, TmdbMediaType::Movie))
+        .collect();
+    Some((collection, results))
+}
+
+pub fn parse_person_credits_json(json: &str) -> Option<TmdbPersonCreditsResponse> {
+    serde_json::from_str(json).ok()
+}
+
+pub fn credit_item_to_result(item: TmdbCreditItem, media_type: TmdbMediaType) -> TmdbResult {
+    search_item_to_result(item.item, media_type)
+}
+
 pub fn parse_movie_detail_json(json: &str) -> Option<TmdbResult> {
     let detail: TmdbMovieDetail = serde_json::from_str(json).ok()?;
     Some(movie_detail_to_result(detail))
@@ -458,9 +594,7 @@ pub fn parse_tmdb_id(value: &str) -> Option<(u64, Option<TmdbMediaType>)> {
     }
 
     // URL format: https://www.themoviedb.org/movie/550-fight-club or /tv/1396-breaking-bad
-    let re = Regex::new(
-        r"(?i)(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)"
-    ).ok()?;
+    let re = Regex::new(r"(?i)(?:https?://)?(?:www\.)?themoviedb\.org/(movie|tv)/(\d+)").ok()?;
 
     if let Some(caps) = re.captures(trimmed) {
         let media_type = match caps.get(1)?.as_str().to_ascii_lowercase().as_str() {
@@ -558,6 +692,7 @@ fn movie_detail_to_result(detail: TmdbMovieDetail) -> TmdbResult {
             backdrops: images_resp.backdrops.unwrap_or_default(),
             logos: images_resp.logos.unwrap_or_default(),
         },
+        collection: detail.belongs_to_collection,
         ..Default::default()
     }
 }
@@ -855,7 +990,10 @@ mod tests {
     #[test]
     fn parse_tmdb_id_case_insensitive() {
         for value in ["tmdb:550", "tmdb-movie:550", "tmdb-tv:1396"] {
-            assert_eq!(parse_tmdb_id(&value.to_ascii_uppercase()), parse_tmdb_id(value));
+            assert_eq!(
+                parse_tmdb_id(&value.to_ascii_uppercase()),
+                parse_tmdb_id(value)
+            );
         }
     }
 
@@ -888,7 +1026,10 @@ mod tests {
         assert_eq!(results[0].id, 550);
         assert_eq!(results[0].title, "Fight Club");
         assert_eq!(results[0].media_type, Some(TmdbMediaType::Movie));
-        assert_eq!(results[0].poster_path, Some("/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg".to_string()));
+        assert_eq!(
+            results[0].poster_path,
+            Some("/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg".to_string())
+        );
         assert_eq!(results[0].genre_ids, vec![18, 53, 35]);
         assert_eq!(next_page, Some("2".to_string()));
     }
@@ -1032,10 +1173,7 @@ mod tests {
             result.theatrical_release_date,
             Some("1999-10-15".to_string())
         );
-        assert_eq!(
-            result.digital_release_date,
-            Some("2000-05-01".to_string())
-        );
+        assert_eq!(result.digital_release_date, Some("2000-05-01".to_string()));
     }
 
     #[test]
@@ -1103,5 +1241,49 @@ mod tests {
         assert_eq!(encode_query_component("Fight Club"), "Fight+Club");
         assert_eq!(encode_query_component("hello world"), "hello+world");
         assert_eq!(encode_query_component("test&value=1"), "test%26value%3D1");
+    }
+
+    #[test]
+    fn discover_urls_join_genres_with_and_semantics() {
+        assert_eq!(
+            build_movie_discover_url("key", &[18, 53], Some(2)),
+            "https://api.themoviedb.org/3/discover/movie?api_key=key&with_genres=18,53&page=2"
+        );
+        assert_eq!(
+            build_tv_discover_url("key", &[18], None),
+            "https://api.themoviedb.org/3/discover/tv?api_key=key&with_genres=18&page=1"
+        );
+    }
+
+    #[test]
+    fn collection_details_map_parts_and_collection_identity() {
+        let json = r#"{
+            "id": 10,
+            "name": "Star Wars Collection",
+            "parts": [{"id": 11, "title": "Star Wars", "release_date": "1977-05-25"}]
+        }"#;
+        let (collection, parts) = parse_collection_detail_json(json).expect("parse");
+        assert_eq!(collection.id, 10);
+        assert_eq!(collection.name, "Star Wars Collection");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].id, 11);
+        assert_eq!(parts[0].media_type, Some(TmdbMediaType::Movie));
+    }
+
+    #[test]
+    fn movie_detail_maps_collection() {
+        let json = r#"{
+            "id": 11,
+            "title": "Star Wars",
+            "belongs_to_collection": {"id": 10, "name": "Star Wars Collection"}
+        }"#;
+        let result = parse_movie_detail_json(json).expect("parse");
+        assert_eq!(
+            result.collection,
+            Some(TmdbCollectionRef {
+                id: 10,
+                name: "Star Wars Collection".to_string()
+            })
+        );
     }
 }

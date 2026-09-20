@@ -2,30 +2,33 @@ use extism_pdk::{http, log, plugin_fn, FnResult, HttpRequest, Json, LogLevel, Wi
 use std::collections::HashSet;
 
 use rs_plugin_common_interfaces::{
-    domain::external_images::ExternalImage,
+    domain::{external_images::ExternalImage, person::PersonType, rs_ids::RsIds},
     lookup::{
         RsLookupMatchType, RsLookupMetadataResults, RsLookupMovie, RsLookupPerson,
-        RsLookupQuery, RsLookupSerie, RsLookupWrapper,
+        RsLookupPersonFilter, RsLookupQuery, RsLookupSerie, RsLookupSerieFilter, RsLookupTagFilter,
+        RsLookupWrapper,
     },
     CredentialType, PluginInformation, PluginType,
 };
-
-
 
 mod convert;
 mod tmdb;
 
 use convert::{
-    tmdb_episode_stills_to_images, tmdb_episode_to_metadata, tmdb_person_to_images,
-    tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata,
+    map_person_type, tmdb_episode_stills_to_images, tmdb_episode_to_metadata,
+    tmdb_person_to_images, tmdb_person_to_metadata, tmdb_result_to_images, tmdb_result_to_metadata,
 };
 use tmdb::{
-    build_episode_images_url, build_movie_detail_url, build_movie_search_url,
-    build_person_detail_url, build_person_search_url, build_tv_detail_url, build_tv_search_url,
-    build_tv_season_detail_url, parse_episode_images_json, parse_movie_detail_json,
-    parse_movie_search_json, parse_person_detail_json, parse_person_search_json, parse_tmdb_id,
-    parse_tmdb_person_id, parse_tv_detail_json, parse_tv_search_json,
-    parse_tv_season_detail_json, TmdbMediaType, TmdbPersonResult, TmdbResult,
+    build_collection_detail_url, build_collection_search_url, build_episode_images_url,
+    build_genre_list_url, build_movie_detail_url, build_movie_discover_url, build_movie_search_url,
+    build_person_credits_url, build_person_detail_url, build_person_search_url,
+    build_tv_detail_url, build_tv_discover_url, build_tv_search_url, build_tv_season_detail_url,
+    credit_item_to_result, parse_collection_detail_json, parse_collection_search_json,
+    parse_episode_images_json, parse_genre_list_json, parse_movie_detail_json,
+    parse_movie_search_json, parse_person_credits_json, parse_person_detail_json,
+    parse_person_search_json, parse_tmdb_id, parse_tmdb_person_id, parse_tv_detail_json,
+    parse_tv_search_json, parse_tv_season_detail_json, TmdbCreditItem, TmdbMediaType,
+    TmdbPersonResult, TmdbResult,
 };
 
 enum LookupTarget {
@@ -152,6 +155,42 @@ fn execute_tv_search_request(
     })
 }
 
+fn execute_discover_request(
+    api_key: &str,
+    media_type: &TmdbMediaType,
+    genre_ids: &[u64],
+    page: Option<u32>,
+) -> FnResult<(Vec<TmdbResult>, Option<String>)> {
+    let url = match media_type {
+        TmdbMediaType::Movie => build_movie_discover_url(api_key, genre_ids, page),
+        TmdbMediaType::Tv => build_tv_discover_url(api_key, genre_ids, page),
+    };
+    let body = execute_json_request(url)?;
+    match media_type {
+        TmdbMediaType::Movie => parse_movie_search_json(&body),
+        TmdbMediaType::Tv => parse_tv_search_json(&body),
+    }
+    .ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB discover response"),
+            500,
+        )
+    })
+}
+
+fn execute_genre_list_request(
+    api_key: &str,
+    media_type: &TmdbMediaType,
+) -> FnResult<Vec<tmdb::TmdbGenre>> {
+    let body = execute_json_request(build_genre_list_url(api_key, media_type))?;
+    parse_genre_list_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB genre list"),
+            500,
+        )
+    })
+}
+
 fn execute_movie_detail_request(api_key: &str, movie_id: u64) -> FnResult<Option<TmdbResult>> {
     let url = build_movie_detail_url(api_key, movie_id);
     let body = execute_json_request(url)?;
@@ -214,7 +253,11 @@ fn resolve_movie_lookup_target(movie: &RsLookupMovie) -> Option<LookupTarget> {
         }
 
         // Check all IDs for "tmdb:12345" patterns
-        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_tmdb_id(value)) {
+        if let Some(id) = ids
+            .as_all_ids()
+            .iter()
+            .find_map(|value| parse_tmdb_id(value))
+        {
             return Some(match id.1 {
                 Some(TmdbMediaType::Tv) => LookupTarget::DirectTv(id.0),
                 _ => LookupTarget::DirectMovie(id.0),
@@ -249,7 +292,11 @@ fn resolve_serie_lookup_target(serie: &RsLookupSerie) -> Option<LookupTarget> {
             return Some(LookupTarget::DirectTv(tmdb_id));
         }
 
-        if let Some(id) = ids.as_all_ids().iter().find_map(|value| parse_tmdb_id(value)) {
+        if let Some(id) = ids
+            .as_all_ids()
+            .iter()
+            .find_map(|value| parse_tmdb_id(value))
+        {
             return Some(match id.1 {
                 Some(TmdbMediaType::Movie) => LookupTarget::DirectMovie(id.0),
                 _ => LookupTarget::DirectTv(id.0),
@@ -313,11 +360,392 @@ fn execute_person_search_request(
     })
 }
 
+fn normalized(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn relation_filters<'a>(
+    query: &'a RsLookupQuery,
+) -> Option<(
+    &'a [RsLookupPersonFilter],
+    &'a [RsLookupSerieFilter],
+    &'a [RsLookupTagFilter],
+    TmdbMediaType,
+    Option<u32>,
+)> {
+    let (people, series, tags, media_type, page_key) = match query {
+        RsLookupQuery::Movie(movie) => (
+            movie.people.as_deref().unwrap_or_default(),
+            movie.series.as_deref().unwrap_or_default(),
+            movie.tags.as_deref().unwrap_or_default(),
+            TmdbMediaType::Movie,
+            movie.page_key.as_deref(),
+        ),
+        RsLookupQuery::Serie(serie) => (
+            serie.people.as_deref().unwrap_or_default(),
+            serie.series.as_deref().unwrap_or_default(),
+            serie.tags.as_deref().unwrap_or_default(),
+            TmdbMediaType::Tv,
+            serie.page_key.as_deref(),
+        ),
+        _ => return None,
+    };
+    (!people.is_empty() || !series.is_empty() || !tags.is_empty()).then_some((
+        people,
+        series,
+        tags,
+        media_type,
+        page_key.and_then(|key| key.parse().ok()),
+    ))
+}
+
+fn filter_id(ids: Option<&RsIds>, provider_key: &str) -> Option<u64> {
+    ids.and_then(|ids| ids.get_u64(provider_key).or_else(|| ids.tmdb()))
+}
+
+fn crew_role_matches(job: &str, role: &PersonType) -> bool {
+    map_person_type(job.to_string()).as_ref() == Some(role)
+}
+
+fn person_filter_matches(result: &TmdbResult, filter: &RsLookupPersonFilter) -> bool {
+    let expected_id = filter_id(filter.ids.as_ref(), "tmdb-person");
+    let expected_name = filter
+        .name
+        .as_deref()
+        .map(normalized)
+        .filter(|name| !name.is_empty());
+    let identity_matches = |id: u64, name: &str| {
+        expected_id.is_some_and(|expected| expected == id)
+            || expected_name
+                .as_ref()
+                .is_some_and(|expected| normalized(name) == *expected)
+    };
+
+    match filter.role.as_ref() {
+        None => {
+            result
+                .cast
+                .iter()
+                .any(|member| identity_matches(member.id, &member.name))
+                || result
+                    .crew
+                    .iter()
+                    .any(|member| identity_matches(member.id, &member.name))
+        }
+        Some(PersonType::Actor) => result
+            .cast
+            .iter()
+            .any(|member| identity_matches(member.id, &member.name)),
+        Some(role) => result.crew.iter().any(|member| {
+            identity_matches(member.id, &member.name) && crew_role_matches(&member.job, role)
+        }),
+    }
+}
+
+fn tag_filter_matches(result: &TmdbResult, filter: &RsLookupTagFilter) -> bool {
+    let expected_id = filter_id(filter.ids.as_ref(), "tmdb-genre");
+    let expected_name = filter
+        .name
+        .as_deref()
+        .map(normalized)
+        .filter(|name| !name.is_empty());
+    result.genres.iter().any(|genre| {
+        expected_id.is_some_and(|id| id == genre.id as u64)
+            || expected_name
+                .as_ref()
+                .is_some_and(|name| normalized(&genre.name) == *name)
+    })
+}
+
+fn series_filter_matches(result: &TmdbResult, filter: &RsLookupSerieFilter) -> bool {
+    let Some(collection) = result.collection.as_ref() else {
+        return false;
+    };
+    let expected_id = filter_id(filter.ids.as_ref(), "tmdb-collection");
+    let expected_name = filter
+        .name
+        .as_deref()
+        .map(normalized)
+        .filter(|name| !name.is_empty());
+    expected_id.is_some_and(|id| id == collection.id)
+        || expected_name
+            .as_ref()
+            .is_some_and(|name| normalized(&collection.name) == *name)
+}
+
+fn result_matches_relation_filters(
+    result: &TmdbResult,
+    people: &[RsLookupPersonFilter],
+    series: &[RsLookupSerieFilter],
+    tags: &[RsLookupTagFilter],
+) -> bool {
+    people
+        .iter()
+        .all(|filter| person_filter_matches(result, filter))
+        && series
+            .iter()
+            .all(|filter| series_filter_matches(result, filter))
+        && tags.iter().all(|filter| tag_filter_matches(result, filter))
+}
+
+fn resolve_person_filter_id(api_key: &str, filter: &RsLookupPersonFilter) -> FnResult<Option<u64>> {
+    if let Some(id) = filter_id(filter.ids.as_ref(), "tmdb-person") {
+        return Ok(Some(id));
+    }
+    let Some(name) = filter
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(None);
+    };
+    let (people, _) = execute_person_search_request(api_key, name, None)?;
+    Ok(people
+        .iter()
+        .find(|person| normalized(&person.name) == normalized(name))
+        .or_else(|| people.first())
+        .map(|person| person.id))
+}
+
+fn credit_matches_role(credit: &TmdbCreditItem, role: &PersonType, cast: bool) -> bool {
+    if role == &PersonType::Actor {
+        return cast;
+    }
+    !cast && crew_role_matches(credit.job.as_deref().unwrap_or_default(), role)
+}
+
+fn credit_matches_seed_role(
+    credit: &TmdbCreditItem,
+    role: &PersonType,
+    cast: bool,
+    media_type: &TmdbMediaType,
+) -> bool {
+    // TMDB models show creators in `created_by`, not as a canonical Creator
+    // job in person TV credits. Seed from all of the person's TV credits and
+    // let the show detail's normalized `created_by` relation validate it.
+    if role == &PersonType::Creator && media_type == &TmdbMediaType::Tv {
+        return true;
+    }
+    credit_matches_role(credit, role, cast)
+}
+
+fn paginate_results(
+    results: Vec<TmdbResult>,
+    page: Option<u32>,
+) -> (Vec<TmdbResult>, Option<String>) {
+    const PAGE_SIZE: usize = 20;
+    let page = page.unwrap_or(1).max(1) as usize;
+    let start = (page - 1).saturating_mul(PAGE_SIZE);
+    if start >= results.len() {
+        return (Vec::new(), None);
+    }
+    let end = (start + PAGE_SIZE).min(results.len());
+    let next = (end < results.len()).then(|| (page + 1).to_string());
+    (
+        results.into_iter().skip(start).take(PAGE_SIZE).collect(),
+        next,
+    )
+}
+
+fn person_seed_results(
+    api_key: &str,
+    filter: &RsLookupPersonFilter,
+    media_type: &TmdbMediaType,
+    page: Option<u32>,
+) -> FnResult<(Vec<TmdbResult>, Option<String>)> {
+    let Some(person_id) = resolve_person_filter_id(api_key, filter)? else {
+        return Ok((Vec::new(), None));
+    };
+    let body = execute_json_request(build_person_credits_url(api_key, person_id, media_type))?;
+    let credits = parse_person_credits_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB person credits"),
+            500,
+        )
+    })?;
+
+    let mut seen = HashSet::new();
+    let mut results = Vec::new();
+    for (credit, cast) in credits
+        .cast
+        .into_iter()
+        .map(|credit| (credit, true))
+        .chain(credits.crew.into_iter().map(|credit| (credit, false)))
+    {
+        if filter
+            .role
+            .as_ref()
+            .is_some_and(|role| !credit_matches_seed_role(&credit, role, cast, media_type))
+        {
+            continue;
+        }
+        if seen.insert(credit.item.id) {
+            results.push(credit_item_to_result(credit, media_type.clone()));
+        }
+    }
+    results.sort_by(|left, right| {
+        right
+            .popularity
+            .partial_cmp(&left.popularity)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(paginate_results(results, page))
+}
+
+fn resolve_genre_ids(
+    api_key: &str,
+    tags: &[RsLookupTagFilter],
+    media_type: &TmdbMediaType,
+) -> FnResult<Option<Vec<u64>>> {
+    let needs_names = tags
+        .iter()
+        .any(|tag| filter_id(tag.ids.as_ref(), "tmdb-genre").is_none());
+    let genres = if needs_names {
+        execute_genre_list_request(api_key, media_type)?
+    } else {
+        Vec::new()
+    };
+    let mut ids = Vec::new();
+    for tag in tags {
+        let id = filter_id(tag.ids.as_ref(), "tmdb-genre").or_else(|| {
+            let name = tag.name.as_deref()?;
+            genres
+                .iter()
+                .find(|genre| normalized(&genre.name) == normalized(name))
+                .map(|genre| genre.id as u64)
+        });
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(Some(ids))
+}
+
+fn tag_seed_results(
+    api_key: &str,
+    tags: &[RsLookupTagFilter],
+    media_type: &TmdbMediaType,
+    page: Option<u32>,
+) -> FnResult<(Vec<TmdbResult>, Option<String>)> {
+    let Some(ids) = resolve_genre_ids(api_key, tags, media_type)? else {
+        return Ok((Vec::new(), None));
+    };
+    execute_discover_request(api_key, media_type, &ids, page)
+}
+
+fn resolve_collection_id(api_key: &str, filter: &RsLookupSerieFilter) -> FnResult<Option<u64>> {
+    if let Some(id) = filter_id(filter.ids.as_ref(), "tmdb-collection") {
+        return Ok(Some(id));
+    }
+    let Some(name) = filter
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(url) = build_collection_search_url(api_key, name) else {
+        return Ok(None);
+    };
+    let body = execute_json_request(url)?;
+    let collections = parse_collection_search_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB collection search"),
+            500,
+        )
+    })?;
+    Ok(collections
+        .iter()
+        .find(|collection| normalized(&collection.name) == normalized(name))
+        .or_else(|| collections.first())
+        .map(|collection| collection.id))
+}
+
+fn collection_seed_results(
+    api_key: &str,
+    filter: &RsLookupSerieFilter,
+    page: Option<u32>,
+) -> FnResult<(Vec<TmdbResult>, Option<String>)> {
+    let Some(collection_id) = resolve_collection_id(api_key, filter)? else {
+        return Ok((Vec::new(), None));
+    };
+    let body = execute_json_request(build_collection_detail_url(api_key, collection_id))?;
+    let (collection, mut results) = parse_collection_detail_json(&body).ok_or_else(|| {
+        WithReturnCode::new(
+            extism_pdk::Error::msg("Failed to parse TMDB collection details"),
+            500,
+        )
+    })?;
+    for result in &mut results {
+        result.collection = Some(collection.clone());
+    }
+    Ok(paginate_results(results, page))
+}
+
+fn relation_seed_results(
+    lookup: &RsLookupWrapper,
+    api_key: &str,
+) -> FnResult<Option<(Vec<TmdbResult>, Option<String>)>> {
+    let Some((people, series, tags, media_type, page)) = relation_filters(&lookup.query) else {
+        return Ok(None);
+    };
+    if let Some(person) = people.first() {
+        return person_seed_results(api_key, person, &media_type, page).map(Some);
+    }
+    if !tags.is_empty() {
+        return tag_seed_results(api_key, tags, &media_type, page).map(Some);
+    }
+    if let Some(series) = series.first() {
+        if media_type == TmdbMediaType::Movie {
+            return collection_seed_results(api_key, series, page).map(Some);
+        }
+        return Ok(Some((Vec::new(), None)));
+    }
+    Ok(Some((Vec::new(), None)))
+}
+
+fn apply_relation_filters(
+    lookup: &RsLookupWrapper,
+    api_key: &str,
+    results: Vec<TmdbResult>,
+) -> FnResult<Vec<TmdbResult>> {
+    let Some((people, series, tags, default_media_type, _)) = relation_filters(&lookup.query)
+    else {
+        return Ok(results);
+    };
+    let mut filtered = Vec::new();
+    for result in results {
+        let media_type = result
+            .media_type
+            .clone()
+            .unwrap_or_else(|| default_media_type.clone());
+        let detail = match media_type {
+            TmdbMediaType::Movie => execute_movie_detail_request(api_key, result.id),
+            TmdbMediaType::Tv => execute_tv_detail_request(api_key, result.id),
+        }?;
+        if let Some(detail) = detail {
+            if result_matches_relation_filters(&detail, people, series, tags) {
+                filtered.push(detail);
+            }
+        }
+    }
+    Ok(filtered)
+}
+
 fn lookup_tmdb(
     lookup: &RsLookupWrapper,
     api_key: &str,
 ) -> FnResult<(Vec<TmdbResult>, Option<String>, Option<RsLookupMatchType>)> {
-    match &lookup.query {
+    let (results, next_page_key, match_type) = match &lookup.query {
         RsLookupQuery::Movie(movie) => {
             let page = movie
                 .page_key
@@ -327,46 +755,52 @@ fn lookup_tmdb(
             match resolve_movie_lookup_target(movie) {
                 Some(LookupTarget::DirectMovie(id)) => {
                     let result = execute_movie_detail_request(api_key, id)?;
-                    Ok((
+                    (
                         result.into_iter().collect(),
                         None,
                         Some(RsLookupMatchType::ExactId),
-                    ))
+                    )
                 }
                 Some(LookupTarget::DirectTv(id)) => {
                     let result = execute_tv_detail_request(api_key, id)?;
-                    Ok((
+                    (
                         result.into_iter().collect(),
                         None,
                         Some(RsLookupMatchType::ExactId),
-                    ))
+                    )
                 }
                 Some(LookupTarget::DirectUnknown(id)) => {
                     // Try movie first, then TV
                     if let Ok(Some(result)) = execute_movie_detail_request(api_key, id) {
-                        return Ok((vec![result], None, Some(RsLookupMatchType::ExactId)));
+                        (vec![result], None, Some(RsLookupMatchType::ExactId))
+                    } else {
+                        let result = execute_tv_detail_request(api_key, id)?;
+                        (
+                            result.into_iter().collect(),
+                            None,
+                            Some(RsLookupMatchType::ExactId),
+                        )
                     }
-                    let result = execute_tv_detail_request(api_key, id)?;
-                    Ok((
-                        result.into_iter().collect(),
-                        None,
-                        Some(RsLookupMatchType::ExactId),
-                    ))
                 }
                 Some(LookupTarget::SearchMovie(query)) => {
                     let (results, next_page_key) =
                         execute_movie_search_request(api_key, &query, page)?;
-                    Ok((results, next_page_key, None))
+                    (results, next_page_key, None)
                 }
                 Some(LookupTarget::SearchTv(query)) => {
                     let (results, next_page_key) =
                         execute_tv_search_request(api_key, &query, page)?;
-                    Ok((results, next_page_key, None))
+                    (results, next_page_key, None)
                 }
-                None => Err(WithReturnCode::new(
-                    extism_pdk::Error::msg("Empty movie query"),
-                    404,
-                )),
+                None => match relation_seed_results(lookup, api_key)? {
+                    Some((results, next_page_key)) => (results, next_page_key, None),
+                    None => {
+                        return Err(WithReturnCode::new(
+                            extism_pdk::Error::msg("Empty movie query"),
+                            404,
+                        ));
+                    }
+                },
             }
         }
         RsLookupQuery::Serie(serie) => {
@@ -378,56 +812,69 @@ fn lookup_tmdb(
             match resolve_serie_lookup_target(serie) {
                 Some(LookupTarget::DirectTv(id)) => {
                     let result = execute_tv_detail_request(api_key, id)?;
-                    Ok((
+                    (
                         result.into_iter().collect(),
                         None,
                         Some(RsLookupMatchType::ExactId),
-                    ))
+                    )
                 }
                 Some(LookupTarget::DirectMovie(id)) => {
                     let result = execute_movie_detail_request(api_key, id)?;
-                    Ok((
+                    (
                         result.into_iter().collect(),
                         None,
                         Some(RsLookupMatchType::ExactId),
-                    ))
+                    )
                 }
                 Some(LookupTarget::DirectUnknown(id)) => {
                     // Try TV first, then movie
                     if let Ok(Some(result)) = execute_tv_detail_request(api_key, id) {
-                        return Ok((vec![result], None, Some(RsLookupMatchType::ExactId)));
+                        (vec![result], None, Some(RsLookupMatchType::ExactId))
+                    } else {
+                        let result = execute_movie_detail_request(api_key, id)?;
+                        (
+                            result.into_iter().collect(),
+                            None,
+                            Some(RsLookupMatchType::ExactId),
+                        )
                     }
-                    let result = execute_movie_detail_request(api_key, id)?;
-                    Ok((
-                        result.into_iter().collect(),
-                        None,
-                        Some(RsLookupMatchType::ExactId),
-                    ))
                 }
                 Some(LookupTarget::SearchTv(query)) => {
                     let (results, next_page_key) =
                         execute_tv_search_request(api_key, &query, page)?;
-                    Ok((results, next_page_key, None))
+                    (results, next_page_key, None)
                 }
                 Some(LookupTarget::SearchMovie(query)) => {
                     let (results, next_page_key) =
                         execute_movie_search_request(api_key, &query, page)?;
-                    Ok((results, next_page_key, None))
+                    (results, next_page_key, None)
                 }
-                None => Err(WithReturnCode::new(
-                    extism_pdk::Error::msg("Empty serie query"),
-                    404,
-                )),
+                None => match relation_seed_results(lookup, api_key)? {
+                    Some((results, next_page_key)) => (results, next_page_key, None),
+                    None => {
+                        return Err(WithReturnCode::new(
+                            extism_pdk::Error::msg("Empty serie query"),
+                            404,
+                        ));
+                    }
+                },
             }
         }
-        _ => Ok((vec![], None, None)),
-    }
+        _ => return Ok((vec![], None, None)),
+    };
+
+    let results = apply_relation_filters(lookup, api_key, results)?;
+    Ok((results, next_page_key, match_type))
 }
 
 fn lookup_tmdb_person(
     lookup: &RsLookupWrapper,
     api_key: &str,
-) -> FnResult<(Vec<TmdbPersonResult>, Option<String>, Option<RsLookupMatchType>)> {
+) -> FnResult<(
+    Vec<TmdbPersonResult>,
+    Option<String>,
+    Option<RsLookupMatchType>,
+)> {
     match &lookup.query {
         RsLookupQuery::Person(person) => {
             let page = person
@@ -683,6 +1130,7 @@ mod tests {
             name: Some("tmdb:550".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_movie_lookup_target(&movie);
@@ -698,6 +1146,7 @@ mod tests {
             name: Some("some name".to_string()),
             ids: Some(RsIds::from_tmdb(550)),
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_movie_lookup_target(&movie);
@@ -713,6 +1162,7 @@ mod tests {
             name: Some("ignored".to_string()),
             ids: Some(RsIds::try_from(vec!["tmdb:550".to_string()]).unwrap()),
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_movie_lookup_target(&movie);
@@ -728,6 +1178,7 @@ mod tests {
             name: Some("Fight Club".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_movie_lookup_target(&movie);
@@ -743,6 +1194,7 @@ mod tests {
             name: Some(String::new()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         assert!(resolve_movie_lookup_target(&movie).is_none());
@@ -754,6 +1206,7 @@ mod tests {
             name: Some("tmdb:1396".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_serie_lookup_target(&serie);
@@ -769,6 +1222,7 @@ mod tests {
             name: Some("tmdb:1396".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_serie_lookup_target(&serie);
@@ -784,6 +1238,7 @@ mod tests {
             name: Some("Breaking Bad".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_serie_lookup_target(&serie);
@@ -799,6 +1254,7 @@ mod tests {
             name: Some("https://www.themoviedb.org/movie/550-fight-club".to_string()),
             ids: None,
             page_key: None,
+            ..Default::default()
         };
 
         let target = resolve_movie_lookup_target(&movie);
@@ -829,5 +1285,84 @@ mod tests {
 
         let deduped = deduplicate_images(images);
         assert_eq!(deduped.len(), 1);
+    }
+
+    fn filtered_movie() -> TmdbResult {
+        TmdbResult {
+            media_type: Some(TmdbMediaType::Movie),
+            id: 550,
+            title: "Fight Club".to_string(),
+            cast: vec![tmdb::TmdbCastMember {
+                id: 287,
+                name: "Brad Pitt".to_string(),
+                ..Default::default()
+            }],
+            crew: vec![tmdb::TmdbCrewMember {
+                id: 7467,
+                name: "David Fincher".to_string(),
+                job: "Director".to_string(),
+                department: "Directing".to_string(),
+                ..Default::default()
+            }],
+            genres: vec![tmdb::TmdbGenre {
+                id: 18,
+                name: "Drama".to_string(),
+            }],
+            collection: Some(tmdb::TmdbCollectionRef {
+                id: 123,
+                name: "Fight Club Collection".to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn optional_person_role_matches_cast_or_crew() {
+        let result = filtered_movie();
+        for (id, name) in [(287, "Brad Pitt"), (7467, "David Fincher")] {
+            let filter = RsLookupPersonFilter {
+                name: Some(name.to_string()),
+                ids: Some(RsIds::from_tmdb(id)),
+                role: None,
+            };
+            assert!(person_filter_matches(&result, &filter));
+        }
+    }
+
+    #[test]
+    fn explicit_person_role_narrows_the_match() {
+        let result = filtered_movie();
+        let mut filter = RsLookupPersonFilter {
+            name: Some("David Fincher".to_string()),
+            role: Some(PersonType::Director),
+            ..Default::default()
+        };
+        assert!(person_filter_matches(&result, &filter));
+        filter.role = Some(PersonType::Actor);
+        assert!(!person_filter_matches(&result, &filter));
+    }
+
+    #[test]
+    fn tag_and_collection_filters_accept_names_and_external_ids() {
+        let result = filtered_movie();
+        let mut tag_ids = RsIds::default();
+        tag_ids.set("tmdb-genre", 18);
+        let mut collection_ids = RsIds::default();
+        collection_ids.set("tmdb-collection", 123);
+
+        assert!(tag_filter_matches(
+            &result,
+            &RsLookupTagFilter {
+                ids: Some(tag_ids),
+                ..Default::default()
+            }
+        ));
+        assert!(series_filter_matches(
+            &result,
+            &RsLookupSerieFilter {
+                name: Some("Fight Club Collection".to_string()),
+                ids: Some(collection_ids),
+            }
+        ));
     }
 }
