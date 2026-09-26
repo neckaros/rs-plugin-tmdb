@@ -43,6 +43,9 @@ pub fn tmdb_result_to_metadata(item: TmdbResult) -> RsLookupMetadataResultWrappe
                 imdb: item.imdb_id,
                 tvdb: item.tvdb_id,
                 status: map_serie_status(&item.status),
+                overview: item.overview,
+                lang: item.original_language,
+                original: item.original_title,
                 ..Default::default()
             };
             RsLookupMetadataResult::Serie(serie)
@@ -708,6 +711,9 @@ mod tests {
             status: Some("Ended".to_string()),
             imdb_id: Some("tt0903747".to_string()),
             tvdb_id: Some(81189),
+            original_title: Some("Breaking Bad".to_string()),
+            original_language: Some("en".to_string()),
+            overview: Some("A chemistry teacher turns to crime.".to_string()),
             ..Default::default()
         });
 
@@ -719,6 +725,9 @@ mod tests {
             assert_eq!(serie.tvdb, Some(81189));
             assert_eq!(serie.year, Some(2008));
             assert_eq!(serie.kind, Some(SerieType::Tv));
+            assert_eq!(serie.lang, Some("en".to_string()));
+            assert_eq!(serie.original, Some("Breaking Bad".to_string()));
+            assert_eq!(serie.overview, Some("A chemistry teacher turns to crime.".to_string()));
         } else {
             panic!("Expected Serie metadata");
         }
