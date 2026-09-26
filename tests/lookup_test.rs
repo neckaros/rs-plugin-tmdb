@@ -227,6 +227,8 @@ fn test_lookup_tv_direct_id() {
 
     assert_eq!(serie.tmdb, Some(1396), "Expected tmdb ID 1396");
     assert_eq!(serie.tvdb, Some(81189), "Expected tvdb ID 81189");
+    assert_eq!(serie.lang.as_deref(), Some("en"), "Expected the original language");
+    assert_eq!(serie.original.as_deref(), Some("Breaking Bad"), "Expected the original title");
     println!("Direct TV ID lookup: {} (tmdb:1396)", serie.name);
 }
 
